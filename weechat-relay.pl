@@ -202,17 +202,20 @@ package WeechatMessage {
 	return $self;
     }
 
+    sub add_chr {
+        my ($self, $chr) = @_;
+	$self->{buf} .= pack("c", $chr);
+    }
+
     sub add_string {
         my ($self, $string) = @_;
         $self->{buf} .= pack("i>/a", $string);
 	return $self;
     }
 
-    sub add_irssi_ptr {
-	my ($self, $obj) = @_;
-	my $ptr = $obj->{_irssi};
-	add_string($self, sprintf("0x%016x", $ptr);
-	return $self;
+    sub add_ptr {
+	my ($self, $ptr) = @_;
+	$self->{buf} .= pack("c/a", sprintf("%016x", $ptr));
     }
 
     sub add_type {
@@ -275,182 +278,118 @@ sub hpath_tok {
 }
 
 # Basic signature for an hdata handler:
-# Input: ($type, $ptr, $subpath, @keys)
-# $type: If 1 this is a key type query, no iteration, just dig down to the data type of whatever is returned and return the relevant strings, using
-#        keyname:type notation in a comma-separated list.
-#        If keys is empty, they want all keys.
-#        You don't have to do the keys in the same order as what is asked for.
-# $ptr: The current object under examination. It will be undefined at the root. At other points it will be some sort of Irssi object.
-#       If $ptr is defined the function should prepend its value to the returned message.
-# $subpath: The subpath below this point. If it has a leading /, it is asking for a subject. If not, this is a root list.
-#           If it's empty, this is the last object and is where the keys should be taken from.
-# @keys: The keys to request.
-# Note: defined($ptr) if and only if (!$type && $subpath =~ m[^/])
-# Output:
-# If $type, return a type name and a name:type string describing the keys (or all keys).
-# Otherwise,
-# Return a string which represents the key data. If this is the toplevel it probably should be returning one string.
-# A list will return multiple strings which is the result of deep calls.
+# list_<n> : Subroutine called when requesting top-level list <n>, the counter value will be passed.
+#   Return value should be the list of objects from the list.
+# sublist_<n> : Subroutine called when requesting member list <n>, the object and counter value will be passed.
+#   Return value should be the object or list of objects in that member.
+# type_sublist_<n> : String indicating the class of the sublist, which must be some other class in the hdata_classes hash.
+# key_<n> : Subroutine called when requesting key <n>. The object to retrieve the key from will be passed, as well as a WeechatMessage instance.
+#   The subroutine should encode the object value into the WeechatMessage instance. It should not return anything.
+# type_key_<n> : String which is the 3-letter code type of the key.
+# from_pointer : Subroutine called when the top-level list item is a pointer address. The pointer (as an integer) is passed.
+#   Return value should be the object in question. Return undef if no such object.
+# get_pointer : Subroutine called to get a pointer value from an object.
 my %hdata_classes = (
-	buffer => sub {
-		my ($type, $ptr, $subpath, @keys) = @_;
-		if ($subpath =~ m[^/]) {
-			my ($item, $count, $rest) = hpath_tok($subpath);
-			my $cls;
-			given ($item)
-			{
-				when ("plugin") {
-				}
-				when ("own_lines") {
-				}
-				when ("mixed_lines") {
-				}
-				when ("lines") {
-					if ($type) {
-						my ($cls, $val) = $hdata_classes{"lines"}->(1, undef, $rest, @keys);
-						return "buffer/$cls", $val;
-					}
-					my (@os) = $hdata_classes{"lines"}->(0, $w, $rest, @keys);
-					my @r;
-					foreach (my $o in @os)
-					{
-						my $m = new WeechatMessage;
-						$m->add_irssi_ptr($w);
-						$m->concat($o);
-						push @r, $m->get_raw_buffer();
-					}
-					return $r;
-				}
-				when ("nicklist_root") {
-				}
-				when ("input_undo_snap") {
-				}
-				when ("input_undo") {
-				}
-				when ("last_input_undo") {
-				}
-				when ("ptr_input_undo") {
-				}
-				when ("completion") {
-				}
-				when ("history") {
-				}
-				when ("last_history") {
-				}
-				when ("ptr_history") {
-				}
-				when ("keys") {
-				}
-				when ("last_key") {
-				}
-				when ("prev_buffer") {
-				}
-				when ("next_buffer") {
-				}
-			}
-		}
-		elsif ($subpath =~ m[^[^/]]) {
-			my ($list, $count, $rest) = hpath_tok($subpath);
-			if ($type) { return $hdata_classes{buffer}->(1, undef, $rest, @keys); # Don't prepend because we're just stripping the list
-			given $list
-			{
-				when ("gui_buffer_last_displayed") {
-				}
-				when ("gui_buffers") {
-					# A weechat "buffer" is what irssi calls a window, but weechat also merges in stuff from window item.
-					# Solution: we return the window and the info of the active item (if there is one)
-					# And we will have to push things like nicklist changes if they do /window item next
-					my @results;
-					foreach (my $w in Irssi::windows())
-					{
-						push @results, $hdata_classes{buffer}->(0, $w, $rest, @keys);
-					}
-					return @results;
-				}
-				when ("last_gui_buffer") {
-				}
-			}
-		}
-		else {
-			$ptr//die "Bad hpath";
-			if ($type) {
-				my %key_types = (
-					number => 'int',
-					layout_number => 'int',
-					layout_number_merge_order => 'int',
-					name => 'str',
-					full_name => 'str',
-					short_name => 'str',
-					type => 'int',
-					notify => 'int',
-					num_displayed => 'int',
-					active => 'int',
-					hidden => 'int',
-					zoomed => 'int',
-					print_hooks_enabled => 'int',
-					day_change => 'int',
-					clear => 'int',
-					filter => 'int',
-					closing => 'int',
-					title => 'str',
-					time_for_each_line => 'int',
-					chat_refresh_needed => 'int',
-					nicklist => 'int',
-					nicklist_case_sensitive => 'int',
-					nicklist_max_length => 'int',
-					nicklist_display_groups => 'int',
-					nicklist_count => 'int',
-					nicklist_groups_count => 'int',
-					nicklist_nicks_count => 'int',
-					nicklist_visible_count => 'int',
-					input => 'int',
-					input_get_unknown_commands => 'int',
-					input_buffer => 'str',
-					input_buffer_alloc => 'int',
-					input_buffer_size => 'int',
-					input_buffer_length => 'int',
-					input_buffer_pos => 'int',
-					input_buffer_1st_display => 'int',
-					input_undo_count => 'int',
-					num_history => 'int',
-					text_search => 'int',
-					text_search_exact => 'int',
-					text_search_regex => 'int',
-					text_search_regex_compiled => 'int',
-					text_search_where => 'int',
-					text_search_found => 'int',
-					text_search_input => 'str',
-					highlight_words => 'str',
-					highlight_regex => 'int',
-					highlight_regex_compiled => 'int',
-					highlight_tags_restrict => 'str',
-					highlight_tags_restrict_count => 'int',
-					highlight_tags_restrict_array => 'arr',
-					highlight_tags => 'str',
-					highlight_tags_count => 'int',
-					highlight_tags_array => 'arr',
-					hotlist_max_level_nicks => 'int',
-					keys_count => 'int',
-					local_variables => 'htb',
-				);
-				if (!@keys) { @keys = sort keys $key_types; }
-				$t = join ",", map { $_ . ":" . $key_types{$_} } @keys;
-				return "buffer", $t;
-			}
-			else {
-
-			}
-		}
-	}
+	buffer => {
+		list_gui_buffers => sub {
+			my ($ct) = @_;
+			# A weechat "buffer" is what irssi calls a window, but weechat also merges in stuff from window item.
+			# Solution: we return the window and the info of the active item (if there is one)
+			# And we will have to push things like nicklist changes if they do /window item next
+			my @w = Irssi::windows();
+			if ($ct eq '*' || $ct > $#w) { return @w; }
+			elsif ($ct <= 0) { return $w[0]; }
+			else { return $w[0 .. $ct]; }
+		},
+		sublist_lines => sub {
+			my ($w, $ct) = @_; # Irssi::Window
+			return $w->view();
+		},
+		get_pointer => sub {
+			my ($w) = @_; # Irssi::Window
+			return $w->{_irssi};
+		},
+		type_sublist_lines => lines,
+		sublist_plugin => sub { },
+		sublist_own_lines => sub { },
+		sublist_mixed_lines => sub { },
+		sublist_nicklist_root => sub { },
+		sublist_input_undo_snap => sub { },
+		sublist_input_undo => sub { },
+		sublist_last_input_undo => sub { },
+		sublist_ptr_input_undo => sub { },
+		sublist_completion => sub { },
+		sublist_history => sub { },
+		sublist_last_history => sub { },
+		sublist_ptr_history => sub { },
+		sublist_keys => sub { },
+		sublist_last_key => sub { },
+		sublist_prev_buffer => sub { },
+		sublist_next_buffer => sub { },
+		list_gui_buffer_last_displayed => sub { },
+		list_last_gui_buffer => sub { },
+		type_key_number => 'int',
+		type_key_layout_number => 'int',
+		type_key_layout_number_merge_order => 'int',
+		type_key_name => 'str',
+		type_key_full_name => 'str',
+		type_key_short_name => 'str',
+		type_key_type => 'int',
+		type_key_notify => 'int',
+		type_key_num_displayed => 'int',
+		type_key_active => 'int',
+		type_key_hidden => 'int',
+		type_key_zoomed => 'int',
+		type_key_print_hooks_enabled => 'int',
+		type_key_day_change => 'int',
+		type_key_clear => 'int',
+		type_key_filter => 'int',
+		type_key_closing => 'int',
+		type_key_title => 'str',
+		type_key_time_for_each_line => 'int',
+		type_key_chat_refresh_needed => 'int',
+		type_key_nicklist => 'int',
+		type_key_nicklist_case_sensitive => 'int',
+		type_key_nicklist_max_length => 'int',
+		type_key_nicklist_display_groups => 'int',
+		type_key_nicklist_count => 'int',
+		type_key_nicklist_groups_count => 'int',
+		type_key_nicklist_nicks_count => 'int',
+		type_key_nicklist_visible_count => 'int',
+		type_key_input => 'int',
+		type_key_input_get_unknown_commands => 'int',
+		type_key_input_buffer => 'str',
+		type_key_input_buffer_alloc => 'int',
+		type_key_input_buffer_size => 'int',
+		type_key_input_buffer_length => 'int',
+		type_key_input_buffer_pos => 'int',
+		type_key_input_buffer_1st_display => 'int',
+		type_key_input_undo_count => 'int',
+		type_key_num_history => 'int',
+		type_key_text_search => 'int',
+		type_key_text_search_exact => 'int',
+		type_key_text_search_regex => 'int',
+		type_key_text_search_regex_compiled => 'int',
+		type_key_text_search_where => 'int',
+		type_key_text_search_found => 'int',
+		type_key_text_search_input => 'str',
+		type_key_highlight_words => 'str',
+		type_key_highlight_regex => 'int',
+		type_key_highlight_regex_compiled => 'int',
+		type_key_highlight_tags_restrict => 'str',
+		type_key_highlight_tags_restrict_count => 'int',
+		type_key_highlight_tags_restrict_array => 'arr',
+		type_key_highlight_tags => 'str',
+		type_key_highlight_tags_count => 'int',
+		type_key_highlight_tags_array => 'arr',
+		type_key_hotlist_max_level_nicks => 'int',
+		type_key_keys_count => 'int',
+		type_key_local_variables => 'htb',
+	},
 );
 
 sub parse_hdata {
     my ($client, $id, $arguments) = @_;
-
-    # $arguments = "hotlist:gui_hotlist(*)"
-    # hdata_head here will be "hotlist"
-    # everything after the : is split on '/' and put into list_path
-    # list_path[0] is the important bit
 
     # OK Gory details of what an hdata path looks like:
     # The first token before the : is the "root class"
@@ -470,11 +409,144 @@ sub parse_hdata {
     #   * is basically "the rest of the list". The example shows ussing (*) on first_line but
     #   first_line isn't a list, so really it gets treated like "a list of one"
 
-    my $count = () = $arguments =~ /(.+):([^ ]+)( (.+))?/;
-    if ($count eq 0) {
-        logmsg("Bad HDATA request: $arguments");
-        return;
-    }
+	my $count = () = $arguments =~ /(.+):([^ ]+)( (.+))?/;
+	if ($count eq 0) {
+		logmsg("Bad HDATA request: $arguments");
+		return;
+	}
+
+	my $hclass = $1;
+	my $path = $2;
+	my @keys = split /,/, ($4//"");
+
+	my $cls = $hdata_classes{$hclass};
+
+	$cls//do{
+		    logmsg("Unknown HDATA class: $hclass");
+		    return;
+	};
+
+	my ($objstr, $ct);
+	($objstr, $ct, $path) = hdata_tok $path;
+
+	my %objs;
+
+	if ($objstr =~ m/^0x/)
+	{
+		logmsg("Got a HDATA for $path from pointer $objstr of $hclass with keys @keys");
+		# Pointer value
+		my $objptr = hex($objstr);
+		exists $cls->{from_pointer} or do {
+			logmsg("Class $hclass can't retrieve objects from pointers.");
+			return;
+		};
+		my $obj = ($cls->{from_pointer}->($objptr));
+		$obj//do{
+			logmsg("Object reference $objstr was not recognized by $hclass.");
+			return;
+		};
+		my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
+		$objs{$ptr} = $obj;
+	}
+	else
+	{
+		exists $cls->{"list_$objstr"} or do {
+			logmsg("List $objstr not defined for $hclass");
+			return;
+		};
+		logmsg("Got a HDATA for $ct $path from list $objstr from $hclass with keys @keys");
+		my @obj = ($cls->{"list_$objstr"}->($ct));
+		unless (@obj) {
+			logmsg("No objects returned for list $objstr from $hclass");
+			return;
+		}
+		for my $obj (@obj) {
+			my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
+			$objs{$ptr} = $obj;
+		}
+	}
+
+	while ($path ne '')
+	{
+		my %results;
+		($objstr, $ct, $path) = hdata_tok $path;
+		$s = $cls->{"sublist_$obstr"};
+		$st = $cls->{"type_sublist_obstr"};
+		$s//do {
+			logmsg("No sublist $objstr in $hclass");
+			return;
+		};
+		$st//do {
+			logmsg("Don't know type of items in sublist $objstr in $hclass");
+			return;
+		};
+		$hclass .= "/" . $st;
+		$newcls = $hdata_classes{$st};
+		$newcls//do {
+			logmsg("Don't recognize type $st of items in sublist $objstr in $hclass");
+			return;
+		}
+		for my $ptr (keys %objs)
+		{
+			my $obj = $objs{$ptr};
+			my @r = $s->($obj, $ct);
+			for my $r (@r)
+			{
+				my $newp = $ptr . "/" . sprintf("%016x", ($newcls->{get_pointer}->($obj)));
+				$results{$newp} = $r;
+			}
+		}
+		$cls = $newcls;
+		%objs = %results;
+	}
+
+	my @keytypes;
+
+	if (!@keys)
+	{
+		@keys = map { /^key_(.*)$/ && $1 } grep { /^key_/ && exists $cls->{"type_key_$_"} } keys $cls;
+	}
+	else
+	{
+		@keys = grep { exists $cls->{"key_$_"} && exists $cls->{"type_key_$_"} } @keys;
+	}
+
+	@keytypes = map { $_ . ":" . $cls->{"type_key_$_"} } @keys;
+
+	my $m = new WeechatMessage;
+
+	$m->add_string($id);
+	$m->add_type("hda");
+	$m->add_string($hclass);
+	$m->add_string(join ",", @keytypes);
+	$m->add_int(length keys %objs);
+
+	for my $ptr (%objs)
+	{
+		# Add the p-path
+		my @ppath = split /\//, $ptr;
+		my $obj = $objs{$ptr};
+		for my $pptr (@ppath)
+		{
+			$m->add_ptr($pptr);
+		}
+		for my $k (@keys)
+		{
+			$cls->{"key_$k"}->($obj, $m);
+		}
+	}
+
+	sendto_client($client, $m->get_buffer());
+
+	return;
+
+    # POD out w00t's version for mine
+=pod
+    # $arguments = "hotlist:gui_hotlist(*)"
+    # hdata_head here will be "hotlist"
+    # everything after the : is split on '/' and put into list_path
+    # list_path[0] is the important bit
+
 
     my $hdata_head = $1;
     my $hdata_tail = $2;
@@ -532,6 +604,8 @@ sub parse_hdata {
     $obj->add_int(0); # count
 
     sendto_client($client, $obj->get_buffer());
+
+=cut
 }
 
 sub process_message {
