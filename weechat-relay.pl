@@ -270,7 +270,7 @@ sub parse_info {
 sub hpath_tok {
 	my ($hpath)= @_;
 
-	if ($hpath =~ m[^/?(?'obj'[^/]+)(?:\((?'ct'(?:[+-]\d+|\*))\))?(?'rest'/.*)?$]) {
+	if ($hpath =~ m[^/?(?'obj'[^/]+?)(?:\((?'ct'(?:[+-]\d+|\*))\))?(?'rest'/.*)?$]) {
 		my ($obj, $count, $rest) = ($1, $2, $3);
 		$count //= 0;
 		$rest //= "";
