@@ -274,8 +274,8 @@ sub hpath_tok {
 		my ($obj, $count, $rest) = ($1, $2, $3);
 		$count //= 0;
 		$rest //= "";
+		return $obj, $count, $rest;
 	}
-	return $obj, $count, $rest;
 }
 
 # Basic signature for an hdata handler:
