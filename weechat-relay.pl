@@ -529,7 +529,7 @@ sub parse_hdata {
 		my $obj = $objs{$ptr};
 		for my $pptr (@ppath)
 		{
-			$m->add_ptr($pptr);
+			$m->add_ptr(hex($pptr));
 		}
 		for my $k (@keys)
 		{
