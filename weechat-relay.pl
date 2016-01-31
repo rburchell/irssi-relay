@@ -239,7 +239,7 @@ package WeechatMessage {
 
     sub get_buffer {
         my ($self) = @_;
-	my $retval = "\0" + $self->{buf};
+	my $retval = "\0" . $self->{buf};
         my $retbuf = pack("N", 4+length($retval)) . $retval;
         return $retbuf;
     }
@@ -427,7 +427,7 @@ sub parse_hdata {
 	};
 
 	my ($objstr, $ct);
-	($objstr, $ct, $path) = hdata_tok $path;
+	($objstr, $ct, $path) = hdata_tok($path);
 
 	my %objs;
 
@@ -469,7 +469,7 @@ sub parse_hdata {
 	while ($path ne '')
 	{
 		my %results;
-		($objstr, $ct, $path) = hdata_tok $path;
+		($objstr, $ct, $path) = hdata_tok($path);
 		my $s = $cls->{"sublist_$objstr"};
 		my $st = $cls->{"type_sublist_$objstr"};
 		$s//do {
