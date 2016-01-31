@@ -275,6 +275,7 @@ sub hpath_tok {
 		$count //= 0;
 		$rest //= "";
 	}
+	return $obj, $count, $rest;
 }
 
 # Basic signature for an hdata handler:
@@ -504,7 +505,7 @@ sub parse_hdata {
 
 	if (!@keys)
 	{
-		@keys = map { /^key_(.*)$/ && $1 } grep { /^key_/ && exists $cls->{"type_key_$_"} } keys $cls;
+		@keys = map { /^key_(.*)$/ && $1 } grep { /^key_/ && exists $cls->{"type_key_$_"} } keys %$cls;
 	}
 	else
 	{
