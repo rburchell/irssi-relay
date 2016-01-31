@@ -522,7 +522,7 @@ sub parse_hdata {
 	$m->add_string(join ",", @keytypes);
 	$m->add_int(length keys %objs);
 
-	for my $ptr (%objs)
+	for my $ptr (keys %objs)
 	{
 		# Add the p-path
 		my @ppath = split /\//, $ptr;
