@@ -427,7 +427,7 @@ sub parse_hdata {
 	};
 
 	my ($objstr, $ct);
-	($objstr, $ct, $path) = hdata_tok($path);
+	($objstr, $ct, $path) = hpath_tok($path);
 
 	my %objs;
 
@@ -469,7 +469,7 @@ sub parse_hdata {
 	while ($path ne '')
 	{
 		my %results;
-		($objstr, $ct, $path) = hdata_tok($path);
+		($objstr, $ct, $path) = hpath_tok($path);
 		my $s = $cls->{"sublist_$objstr"};
 		my $st = $cls->{"type_sublist_$objstr"};
 		$s//do {
