@@ -239,7 +239,7 @@ package WeechatMessage {
 
     sub get_buffer {
         my ($self) = @_;
-	$retval = "\0" + $self->{buf};
+	my $retval = "\0" + $self->{buf};
         my $retbuf = pack("N", 4+length($retval)) . $retval;
         return $retbuf;
     }
@@ -271,7 +271,7 @@ sub hpath_tok {
 	my ($hpath)= @_;
 
 	if ($hpath =~ m[^/?(?'obj'[^/]+)(?:\((?'ct'(?:[+-]\d+|\*))\))?(?'rest'/.*)?$]) {
-		($obj, $count, $rest) = ($1, $2, $3);
+		my ($obj, $count, $rest) = ($1, $2, $3);
 		$count //= 0;
 		$rest //= "";
 	}
@@ -309,7 +309,7 @@ my %hdata_classes = (
 			my ($w) = @_; # Irssi::Window
 			return $w->{_irssi};
 		},
-		type_sublist_lines => lines,
+		type_sublist_lines => 'lines',
 		sublist_plugin => sub { },
 		sublist_own_lines => sub { },
 		sublist_mixed_lines => sub { },
@@ -470,8 +470,8 @@ sub parse_hdata {
 	{
 		my %results;
 		($objstr, $ct, $path) = hdata_tok $path;
-		$s = $cls->{"sublist_$obstr"};
-		$st = $cls->{"type_sublist_obstr"};
+		my $s = $cls->{"sublist_$objstr"};
+		my $st = $cls->{"type_sublist_$objstr"};
 		$s//do {
 			logmsg("No sublist $objstr in $hclass");
 			return;
@@ -481,11 +481,11 @@ sub parse_hdata {
 			return;
 		};
 		$hclass .= "/" . $st;
-		$newcls = $hdata_classes{$st};
+		my $newcls = $hdata_classes{$st};
 		$newcls//do {
 			logmsg("Don't recognize type $st of items in sublist $objstr in $hclass");
 			return;
-		}
+		};
 		for my $ptr (keys %objs)
 		{
 			my $obj = $objs{$ptr};
