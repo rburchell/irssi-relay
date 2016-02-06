@@ -8,6 +8,8 @@ use v5.12;
 use strict;
 use warnings 'all';
 
+no warnings 'portable';
+
 use Irssi;
 use Irssi::TextUI;
 
@@ -310,6 +312,12 @@ my %hdata_classes = (
 			my ($w) = @_; # Irssi::Window
 			return $w->{_irssi};
 		},
+		from_pointer => sub {
+			my ($p) = @_;
+			my @w = Irssi::windows();
+			my ($w) = grep { $_->{_irssi} == $p } @w;
+			return $w;
+		},
 		type_sublist_lines => 'lines',
 		sublist_plugin => sub { },
 		sublist_own_lines => sub { },
@@ -330,36 +338,110 @@ my %hdata_classes = (
 		list_gui_buffer_last_displayed => sub { },
 		list_last_gui_buffer => sub { },
 		type_key_number => 'int',
+		key_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); }
 		type_key_layout_number => 'int',
+		key_layout_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); },
 		type_key_layout_number_merge_order => 'int',
 		type_key_name => 'str',
+		key_name => sub { my ($w, $m) = @_; ($wi) = $w->items(); if(defined($wi)) { $s = $wi->{server}; $m->add_str($s->{address} . "." . $wi->{name}); } else { $m->add_str($w->{name}); },
 		type_key_full_name => 'str',
+		key_full_name => sub { my ($w, $m) = @_; ($wi) = $w->items(); if(defined($wi)) { $s = $wi->{server}; $m->add_str('irc.' . $s->{address} . "." . $wi->{name}); } else { 'irc.' . $m->add_str($w->{name}); },
 		type_key_short_name => 'str',
+		key_short_name => sub { my ($w, $m) = @_; ($wi) = $w->items(); if(defined($wi)) { $m->add_str($wi->{name}); } else { $m->add_str($w->{name}); },
 		type_key_type => 'int',
+		key_type => sub { my ($w, $m) = @_; ($wi) = $w->items(); $m->add_int(1); }, # GUI_BUFFER_TYPE_FREE
 		type_key_notify => 'int',
+		key_notify => sub {
+			my ($w, $m) = @_;
+			$m->add_int(3); # GUI_BUFFER_NOTIFY_ALL
+			return;
+=if0
+			given ($w->{hilight_color}) {
+				when(0) { $m->add_int(0); } # DATA_LEVEL_NONE => GUI_BUFFER_NOTIFY_NONE
+				when(1) { $m->add_int(3); } # DATA_LEVEL_TEXT => GUI_BUFFER_NOTIFY_ALL
+				when(2) { $m->add_int(2); } # DATA_LEVEL_MSG => GUI_BUFFER_NOTIFY_MESSAGE
+				when(3) { $m->add_int(1); } # DATA_LEVEL_HILIGHT => GUI_BUFFER_NOTIFY_HIGHLIGHT
+				default { $m->add_int(3); } # Send any other value as GUI_BUFFER_NOTIFY_ALL
+			},
+=cut
 		type_key_num_displayed => 'int',
+		key_num_displayed => sub { my ($w, $m) = @_; $m->add_int(1); },
 		type_key_active => 'int',
+		key_active => sub { my ($w, $m) = @_; $m->add_int(2); }, # Only active (not merged)
 		type_key_hidden => 'int',
+		key_hidden => sub { my ($w, $m) = @_; $m->add_int(0); }, # not hidden
 		type_key_zoomed => 'int',
+		key_zoomed => sub { my ($w, $m) = @_; $m->add_int(0); }, # not zoomed
 		type_key_print_hooks_enabled => 'int',
+		key_print_hooks_enabled => sub { my ($w, $m) = @_; $m->add_int(0); }, # No hooks
 		type_key_day_change => 'int',
+		key_day_change => sub { my ($w, $m) = @_; $m->add_int(1); }, # Yes irssi prints "Day changed" lines
 		type_key_clear => 'int',
+		key_clear => sub { my ($w, $m) = @_; $m->add_int(1); }, # /clear allowed
 		type_key_filter => 'int',
+		key_filter => sub { my ($w, $m) = @_; $m->add_int(0); }, # no filters
 		type_key_closing => 'int',
+		key_closing => sub { my ($w, $m) = @_; $m->add_int(0); }, # not closing
 		type_key_title => 'str',
+		key_title => sub { my ($w, $m) = @_; ($wi) = $w->items(); if (defined($wi)) { $m->add_str($wi->parse_special('$topic')); } else { $m->add_str(Irssi::parse_special('Irssi v$J - http://www.irssi.org'); } },
 		type_key_time_for_each_line => 'int',
+		key_time_for_each_lilne => sub { my ($w, $m) = @_; $m->add_int(Irssi::settings_get_bool("timestamps")); },
 		type_key_chat_refresh_needed => 'int',
+		key_chat_refresh_needed => sub { my ($w, $m) = @_; $m->add_int(0); }, # Not sure what to do here
 		type_key_nicklist => 'int',
+		key_nicklist => sub {
+			my ($w, $m) = @_;
+			($wi) = $w->items();
+			if (defined($wi) && $wi->{type} eq "CHANNEL") { $m->add_int(1); }
+			else { $m->add_int(0); }
+		},
 		type_key_nicklist_case_sensitive => 'int',
+		key_nicklist_case_sensitive => sub { my ($w, $m) = @_; $m->add_int(0); }
 		type_key_nicklist_max_length => 'int',
+		key_nicklist_max_length => sub { my ($w, $m) = @_; $m->add_int(65535); }, # Theoretically unlimited, since irssi knows how malloc works
 		type_key_nicklist_display_groups => 'int',
+		key_nicklist_display_groups => sub { my ($w, $m) = @_; $m->add_int(0); },
 		type_key_nicklist_count => 'int',
+		key_nicklist_count => sub {
+			my ($w, $m) = @_;
+			($wi) = $w->items();
+			if (defined($wi) && $wi->DOES("Irssi::Irc::Channel")) {
+				$m->add_int(scalar(@{[$wi->nicks()]}));
+			}
+			else {
+				$m->add_int(0);
+			}
+		},
 		type_key_nicklist_groups_count => 'int',
+		key_nicklist_groups_count => sub { my ($w, $m) = @_; $m->add_int(0); },
 		type_key_nicklist_nicks_count => 'int',
+		key_nicklist_nicks_count => sub {
+			my ($w, $m) = @_;
+			($wi) = $w->items();
+			if (defined($wi) && $wi->DOES("Irssi::Irc::Channel")) {
+				$m->add_int(scalar(@{[$wi->nicks()]}));
+			}
+			else {
+				$m->add_int(0);
+			}
+		},
 		type_key_nicklist_visible_count => 'int',
+		key_nicklist_visible_count => sub {
+			my ($w, $m) = @_;
+			($wi) = $w->items();
+			if (defined($wi) && $wi->DOES("Irssi::Irc::Channel")) {
+				$m->add_int(scalar(@{[$wi->nicks()]}));
+			}
+			else {
+				$m->add_int(0);
+			}
+		},
 		type_key_input => 'int',
+		key_input => sub { my ($w, $m) = @_; $m->add_int(1); },
 		type_key_input_get_unknown_commands => 'int',
+		key_input_get_unknown_commands => sub { my ($w, $m) = @_; $m->add_int(0); },
 		type_key_input_buffer => 'str',
+		key_input_buffer => sub { my ($w, $m) = @_; $m->add_str(Irssi::parse_special('$L'); },
 		type_key_input_buffer_alloc => 'int',
 		type_key_input_buffer_size => 'int',
 		type_key_input_buffer_length => 'int',
@@ -386,6 +468,12 @@ my %hdata_classes = (
 		type_key_hotlist_max_level_nicks => 'int',
 		type_key_keys_count => 'int',
 		type_key_local_variables => 'htb',
+		key_local_variables => sub {
+			my ($w, $m) = @_;
+			$m->add_type("str");
+			$m->add_type("str");
+			$m->add_int(0);
+		},
 	},
 );
 
@@ -542,7 +630,7 @@ sub parse_hdata {
 	return;
 
     # POD out w00t's version for mine
-=pod
+=if0
     # $arguments = "hotlist:gui_hotlist(*)"
     # hdata_head here will be "hotlist"
     # everything after the : is split on '/' and put into list_path
