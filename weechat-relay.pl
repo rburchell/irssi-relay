@@ -243,6 +243,9 @@ package WeechatMessage {
         my ($self) = @_;
 	my $retval = "\0" . $self->{buf};
         my $retbuf = pack("N", 4+length($retval)) . $retval;
+	local $Data::Dumper::Terse = 1;
+	local $Data::Dumper::Useqq = 1;
+	warn "Buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']);
         return $retbuf;
     }
 
@@ -338,18 +341,18 @@ my %hdata_classes = (
 		list_gui_buffer_last_displayed => sub { },
 		list_last_gui_buffer => sub { },
 		type_key_number => 'int',
-		key_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); }
+		key_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); },
 		type_key_layout_number => 'int',
 		key_layout_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); },
 		type_key_layout_number_merge_order => 'int',
 		type_key_name => 'str',
-		key_name => sub { my ($w, $m) = @_; ($wi) = $w->items(); if(defined($wi)) { $s = $wi->{server}; $m->add_str($s->{address} . "." . $wi->{name}); } else { $m->add_str($w->{name}); },
+		key_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string($s->{address} . "." . $wi->{name}); } else { $m->add_string($w->{name}); } },
 		type_key_full_name => 'str',
-		key_full_name => sub { my ($w, $m) = @_; ($wi) = $w->items(); if(defined($wi)) { $s = $wi->{server}; $m->add_str('irc.' . $s->{address} . "." . $wi->{name}); } else { 'irc.' . $m->add_str($w->{name}); },
+		key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { 'irc.' . $m->add_string($w->{name}); } },
 		type_key_short_name => 'str',
-		key_short_name => sub { my ($w, $m) = @_; ($wi) = $w->items(); if(defined($wi)) { $m->add_str($wi->{name}); } else { $m->add_str($w->{name}); },
+		key_short_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { $m->add_string($wi->{name}); } else { $m->add_string($w->{name}); } },
 		type_key_type => 'int',
-		key_type => sub { my ($w, $m) = @_; ($wi) = $w->items(); $m->add_int(1); }, # GUI_BUFFER_TYPE_FREE
+		key_type => sub { my ($w, $m) = @_; my ($wi) = $w->items(); $m->add_int(1); }, # GUI_BUFFER_TYPE_FREE
 		type_key_notify => 'int',
 		key_notify => sub {
 			my ($w, $m) = @_;
@@ -364,6 +367,7 @@ my %hdata_classes = (
 				default { $m->add_int(3); } # Send any other value as GUI_BUFFER_NOTIFY_ALL
 			},
 =cut
+		},
 		type_key_num_displayed => 'int',
 		key_num_displayed => sub { my ($w, $m) = @_; $m->add_int(1); },
 		type_key_active => 'int',
@@ -383,7 +387,7 @@ my %hdata_classes = (
 		type_key_closing => 'int',
 		key_closing => sub { my ($w, $m) = @_; $m->add_int(0); }, # not closing
 		type_key_title => 'str',
-		key_title => sub { my ($w, $m) = @_; ($wi) = $w->items(); if (defined($wi)) { $m->add_str($wi->parse_special('$topic')); } else { $m->add_str(Irssi::parse_special('Irssi v$J - http://www.irssi.org'); } },
+		key_title => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if (defined($wi)) { $m->add_string($wi->parse_special('$topic')); } else { $m->add_string(Irssi::parse_special('Irssi v$J - http://www.irssi.org')); } },
 		type_key_time_for_each_line => 'int',
 		key_time_for_each_lilne => sub { my ($w, $m) = @_; $m->add_int(Irssi::settings_get_bool("timestamps")); },
 		type_key_chat_refresh_needed => 'int',
@@ -391,12 +395,12 @@ my %hdata_classes = (
 		type_key_nicklist => 'int',
 		key_nicklist => sub {
 			my ($w, $m) = @_;
-			($wi) = $w->items();
+			my ($wi) = $w->items();
 			if (defined($wi) && $wi->{type} eq "CHANNEL") { $m->add_int(1); }
 			else { $m->add_int(0); }
 		},
 		type_key_nicklist_case_sensitive => 'int',
-		key_nicklist_case_sensitive => sub { my ($w, $m) = @_; $m->add_int(0); }
+		key_nicklist_case_sensitive => sub { my ($w, $m) = @_; $m->add_int(0); },
 		type_key_nicklist_max_length => 'int',
 		key_nicklist_max_length => sub { my ($w, $m) = @_; $m->add_int(65535); }, # Theoretically unlimited, since irssi knows how malloc works
 		type_key_nicklist_display_groups => 'int',
@@ -404,7 +408,7 @@ my %hdata_classes = (
 		type_key_nicklist_count => 'int',
 		key_nicklist_count => sub {
 			my ($w, $m) = @_;
-			($wi) = $w->items();
+			my ($wi) = $w->items();
 			if (defined($wi) && $wi->DOES("Irssi::Irc::Channel")) {
 				$m->add_int(scalar(@{[$wi->nicks()]}));
 			}
@@ -417,7 +421,7 @@ my %hdata_classes = (
 		type_key_nicklist_nicks_count => 'int',
 		key_nicklist_nicks_count => sub {
 			my ($w, $m) = @_;
-			($wi) = $w->items();
+			my ($wi) = $w->items();
 			if (defined($wi) && $wi->DOES("Irssi::Irc::Channel")) {
 				$m->add_int(scalar(@{[$wi->nicks()]}));
 			}
@@ -428,7 +432,7 @@ my %hdata_classes = (
 		type_key_nicklist_visible_count => 'int',
 		key_nicklist_visible_count => sub {
 			my ($w, $m) = @_;
-			($wi) = $w->items();
+			my ($wi) = $w->items();
 			if (defined($wi) && $wi->DOES("Irssi::Irc::Channel")) {
 				$m->add_int(scalar(@{[$wi->nicks()]}));
 			}
@@ -441,7 +445,7 @@ my %hdata_classes = (
 		type_key_input_get_unknown_commands => 'int',
 		key_input_get_unknown_commands => sub { my ($w, $m) = @_; $m->add_int(0); },
 		type_key_input_buffer => 'str',
-		key_input_buffer => sub { my ($w, $m) = @_; $m->add_str(Irssi::parse_special('$L'); },
+		key_input_buffer => sub { my ($w, $m) = @_; $m->add_string(Irssi::parse_special('$L')); },
 		type_key_input_buffer_alloc => 'int',
 		type_key_input_buffer_size => 'int',
 		type_key_input_buffer_length => 'int',
@@ -475,6 +479,7 @@ my %hdata_classes = (
 			$m->add_int(0);
 		},
 	},
+
 );
 
 sub parse_hdata {
