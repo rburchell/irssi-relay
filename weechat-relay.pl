@@ -128,6 +128,8 @@ sub logmsg {
     app->log->info($msg);
 }
 
+my $logmsg = \&logmsg; # For WeechatMessage
+
 websocket '/weechat' => sub {
     my $client = shift;
     logmsg("Client connected:" . $client->tx->remote_address);
@@ -262,7 +264,7 @@ package WeechatMessage {
         my $retbuf = pack("N", 4+length($retval)) . $retval;
 	local $Data::Dumper::Terse = 1;
 	local $Data::Dumper::Useqq = 1;
-	Irssi::Script::weechat_relay::logmsg("Buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']));
+	$logmsg->("Buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']));
         return $retbuf;
     }
 
@@ -292,7 +294,7 @@ sub parse_info {
 sub hpath_tok {
 	my ($hpath)= @_;
 
-	if ($hpath =~ m[^/?(?'obj'[^/]+?)(?:\((?'ct'(?:[+-]\d+|\*))\))?(?'rest'/.*)?$]) {
+	if ($hpath =~ m[^/?(?'obj'[^/]+?)(?:\((?'ct'(?:[+-]?\d+|\*))\))?(?'rest'/.*)?$]) {
 		my ($obj, $count, $rest) = ($1, $2, $3);
 		$count //= 0;
 		$rest //= "";
@@ -326,8 +328,9 @@ my %hdata_classes = (
 		},
 		sublist_lines => sub {
 			my ($w, $ct) = @_; # Irssi::Window
-			return $w->view();
+			return $w->view()->{buffer};
 		},
+		type_sublist_lines => 'lines',
 		get_pointer => sub {
 			my ($w) = @_; # Irssi::Window
 			return $w->{_irssi};
@@ -338,10 +341,11 @@ my %hdata_classes = (
 			my ($w) = grep { $_->{_irssi} == $p } @w;
 			return $w;
 		},
-		type_sublist_lines => 'lines',
 		sublist_plugin => sub { },
-		sublist_own_lines => sub { },
-		sublist_mixed_lines => sub { },
+		sublist_own_lines => sub { my ($w, $ct) = @_; return $w->view()->{buffer}; },
+		type_sublist_own_lines => 'lines',
+		sublist_mixed_lines => sub { my ($w, $ct) = @_; return $w->view()->{buffer}; },
+		type_sublist_mixed_lines => 'lines',
 		sublist_nicklist_root => sub { },
 		sublist_input_undo_snap => sub { },
 		sublist_input_undo => sub { },
@@ -524,6 +528,209 @@ my %hdata_classes = (
 			$m->add_int(0);
 		},
 	},
+	lines => {
+		sublist_first_line => sub {
+			my ($buf, $ct) = @_;
+			my $l = $buf->{first_line};
+			my @l = ([$buf, $l]);
+			if ($ct eq '*')
+			{
+				while (defined($l = $l->next()))
+				{
+					push @l, ([$buf, $l]);
+				}
+			}
+			elsif ($ct < 0)
+			{
+				while ($ct < 0)
+				{
+					++$ct;
+					$l = $l->prev();
+					$l//last;
+					push @l, ([$buf, $l]);
+				}
+			}
+			else
+			{
+				while ($ct > 0)
+				{
+					$l = $l->next();
+					$l//last;
+					--$ct;
+					push @l, ([$buf, $l]);
+				}
+			}
+			return @l;
+		},
+		get_pointer => sub {
+			my ($v) = @_;
+			return $v->{_irssi};
+		},
+		from_pointer => sub {
+			my ($ptr) = @_;
+			my @w = Irssi::windows();
+			my @v = map { $_->view(); } @w;
+			my ($v) = grep { $_->{_irssi} == $ptr } @v;
+			return $v;
+		},
+		type_sublist_first_line => 'line',
+		sublist_last_line => sub {
+			my ($buf, $ct) = @_;
+			my $l = $buf->{cur_line};
+			my @l = ([$buf, $l]);
+			if ($ct eq '*')
+			{
+				while (defined($l = $l->next()))
+				{
+					push @l, ([$buf, $l]);
+				}
+			}
+			elsif ($ct < 0)
+			{
+				while ($ct < 0)
+				{
+					++$ct;
+					$l = $l->prev();
+					$l//last;
+					push @l, ([$buf, $l]);
+				}
+			}
+			else
+			{
+				while ($ct > 0)
+				{
+					$l = $l->next();
+					$l//last;
+					--$ct;
+					push @l, ([$buf, $l]);
+				}
+			}
+			return @l;
+		},
+		type_sublist_last_line => 'line',
+		sublist_last_read_line => sub {
+			my ($buf, $ct) = @_;
+			my $l = $buf->{cur_line};
+			my @l = ([$buf, $l]);
+			if ($ct eq '*')
+			{
+				while (defined($l = $l->next()))
+				{
+					push @l, ([$buf, $l]);
+				}
+			}
+			elsif ($ct < 0)
+			{
+				while ($ct < 0)
+				{
+					++$ct;
+					$l = $l->prev();
+					$l//last;
+					push @l, ([$buf, $l]);
+				}
+			}
+			else
+			{
+				while ($ct > 0)
+				{
+					$l = $l->next();
+					$l//last;
+					--$ct;
+					push @l, ([$buf, $l]);
+				}
+			}
+			return @l;
+		},
+		type_sublist_last_read_line => 'line',
+		type_key_lines_count => 'int',
+		key_lines_count => sub {
+			my ($buf, $m) = @_;
+			$m->add_int($buf->{lines_count});
+			return;
+		},
+		type_key_first_line_not_read => 'int',
+		key_first_line_not_read => sub {
+			my ($buf, $m) = @_;
+			$m->add_int(0);
+		},
+		type_key_lines_hidden => 'int',
+		key_lines_hidden => sub {
+			my ($buf, $m) = @_;
+			$m->add_int(0);
+		},
+		type_key_buffer_max_length => 'int',
+		key_buffer_max_length => sub {
+			my ($buf, $m) = @_;
+			$m->add_int(65536); # Arbitrary
+		},
+		type_key_buffer_max_length_refresh => 'int',
+		type_key_prefix_max_length => 'int',
+		key_prefix_max_length => sub {
+			my ($buf, $m) = @_;
+			$m->add_int(65536); # Arbitrary
+		},
+		type_key_prefix_max_length_refresh => 'int',
+	},
+	line => {
+		sublist_data => sub {
+			my ($bl, $ct) = @_;
+			return $bl;
+		},
+		get_pointer => sub {
+			my ($bl) = @_;
+			my ($buf, $l) = @$bl;
+			return $l->{_irssi};
+		},
+		type_sublist_data => 'line_data',
+	},
+	line_data => {
+		get_pointer => sub {
+			my ($bl, $ct) = @_;
+			my ($buf, $l) = @$bl;
+			return $l->{_irssi};
+		},
+		type_key_buffer => 'ptr',
+		key_buffer => sub {
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+			my @w = Irssi::windows();
+			my ($w) = grep { $_->view()->{buffer}->{_irssi} == $buf->{_irssi} } @w;
+			$m->add_ptr($w->{_irssi});
+		},
+		#type_key_y => 'int',
+		#key_y => sub { my ($l, $m) = @_; $m->add_int(uhIdunno); },
+		type_key_date => 'tim',
+		key_date => sub {
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+			$m->add_string_shortlength($l->{info}->{time});
+		},
+		type_key_date_printed => 'tim',
+		key_date_printed => sub {
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+			$m->add_string_shortlength($l->{info}->{time});
+		},
+		#type_key_str_time => 'str',
+		#type_key_tags_count => 'int',
+		#type_key_tags => 'arr',
+		type_key_displayed => 'chr',
+		key_displayed => sub { my ($bl, $m) = @_; $m->add_chr(1); },
+		type_key_highlight => 'chr',
+		key_highlight => sub { my ($bl, $m) = @_; $m->add_chr(0); },
+		type_key_refresh_needed => 'chr',
+		key_refresh_needed => sub { my ($bl, $m) = @_; $m->add_chr(0); },
+		type_key_prefix => 'str',
+		key_prefix => sub { my ($bl, $m) = @_; $m->add_string(''); },
+		type_key_prefix_length => 'int',
+		key_prefix_length => sub { my ($bl, $m) = @_; $m->add_int(0); },
+		type_key_message => 'str',
+		key_message => sub {
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+		       	$m->add_string($l->get_text(0));
+		},
+	},
 );
 
 sub parse_hdata {
@@ -555,7 +762,7 @@ sub parse_hdata {
 
 	my $hclass = $1;
 	my $path = $2;
-	my @keys = split /,/, ($4//"");
+	my @keys = grep /./, split /,/, ($4//"");
 
 	my $cls = $hdata_classes{$hclass};
 
@@ -567,7 +774,7 @@ sub parse_hdata {
 	my ($objstr, $ct);
 	($objstr, $ct, $path) = hpath_tok($path);
 
-	my %objs;
+	my @objs;
 
 	if ($objstr =~ m/^0x/)
 	{
@@ -584,7 +791,8 @@ sub parse_hdata {
 			return;
 		};
 		my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
-		$objs{$ptr} = $obj;
+		#$objs{$ptr} = $obj;
+		@objs = ($ptr => $obj);
 	}
 	else
 	{
@@ -601,13 +809,14 @@ sub parse_hdata {
 		#}
 		for my $obj (@obj) {
 			my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
-			$objs{$ptr} = $obj;
+			#$objs{$ptr} = $obj;
+			push @objs, ($ptr => $obj);
 		}
 	}
 
 	while ($path ne '')
 	{
-		my %results;
+		my @results;
 		($objstr, $ct, $path) = hpath_tok($path);
 		my $s = $cls->{"sublist_$objstr"};
 		my $st = $cls->{"type_sublist_$objstr"};
@@ -625,29 +834,35 @@ sub parse_hdata {
 			logmsg("Don't recognize type $st of items in sublist $objstr in $hclass");
 			return;
 		};
-		for my $ptr (keys %objs)
+		for (my $oix = 0; $oix < scalar(@objs); $oix += 2)
 		{
-			my $obj = $objs{$ptr};
+			my $ptr = $objs[$oix];
+			my $obj = $objs[$oix + 1];
 			my @r = $s->($obj, $ct);
 			for my $r (@r)
 			{
-				my $newp = $ptr . "/" . sprintf("%016x", ($newcls->{get_pointer}->($obj)));
-				$results{$newp} = $r;
+				my $newp = $ptr . "/" . sprintf("%016x", ($newcls->{get_pointer}->($r)));
+				logmsg($newp);
+				#$results{$newp} = $r;
+				push @results, ($newp => $r);
 			}
 		}
 		$cls = $newcls;
-		%objs = %results;
+		@objs = @results;
 	}
 
 	my @keytypes;
 
-	if (!@keys)
+	if (@keys < 1)
 	{
-		@keys = map { /^key_(.*)$/ && $1 } grep { /^key_/ && exists $cls->{"type_key_$_"} } keys %$cls;
+		logmsg("Getting all keys from $hclass");
+		@keys = map { /^key_(.*)$/ && $1 } grep { /^key_/ && exists $cls->{"type_$_"} } keys %$cls;
+		logmsg("Keys: @keys");
 	}
 	else
 	{
 		@keys = grep { exists $cls->{"key_$_"} && exists $cls->{"type_key_$_"} } @keys;
+		logmsg("Actual defined keys: @keys");
 	}
 
 	@keytypes = map { $_ . ":" . $cls->{"type_key_$_"} } @keys;
@@ -658,13 +873,15 @@ sub parse_hdata {
 	$m->add_type("hda");
 	$m->add_string($hclass);
 	$m->add_string(join ",", @keytypes);
-	$m->add_int(scalar keys %objs);
+	$m->add_int((scalar @objs)/2);
 
-	for my $ptr (keys %objs)
+	for (my $oix = 0; $oix < scalar(@objs); $oix += 2)
+	#for my $ptr (keys %objs)
 	{
+		my $ptr = $objs[$oix];
 		# Add the p-path
 		my @ppath = split /\//, $ptr;
-		my $obj = $objs{$ptr};
+		my $obj = $objs[$oix + 1];
 		for my $pptr (@ppath)
 		{
 			$m->add_ptr(hex($pptr));
@@ -892,6 +1109,7 @@ sub UNLOAD {
     Irssi::signal_remove("window destroyed", "window_destroyed");
     Irssi::signal_remove("window activity", "window_activity");
     # TODO: is daemon cleared up properly? and finish this
+    $daemon->stop();
     # Symbol::delete_package("WeechatMessage");
 }
 
