@@ -235,6 +235,7 @@ package WeechatMessage {
     sub add_ptr {
 	my ($self, $ptr) = @_;
 	#$self->{buf} .= pack("c/a", sprintf("%016x", $ptr));
+	use integer;
 	$self->add_string_shortlength(sprintf("%016x", $ptr));
 	return $self;
     }
@@ -369,7 +370,7 @@ my %hdata_classes = (
 		type_key_name => 'str',
 		key_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string($s->{address} . "." . $wi->{name}); } else { $m->add_string($w->{name}); } },
 		type_key_full_name => 'str',
-		key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { 'irc.' . $m->add_string($w->{name}); } },
+		key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { $m->add_string('irc.' . $w->{name}); } },
 		type_key_short_name => 'str',
 		key_short_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { $m->add_string($wi->{name}); } else { $m->add_string($w->{name}); } },
 		type_key_type => 'int',
@@ -734,7 +735,8 @@ my %hdata_classes = (
 );
 
 sub parse_hdata {
-    my ($client, $id, $arguments) = @_;
+	use integer;
+	my ($client, $id, $arguments) = @_;
 
     # OK Gory details of what an hdata path looks like:
     # The first token before the : is the "root class"
@@ -780,6 +782,7 @@ sub parse_hdata {
 	{
 		logmsg("Got a HDATA for $path from pointer $objstr of $hclass with keys @keys");
 		# Pointer value
+		no warnings 'portable'; # I MEAN IT
 		my $objptr = hex($objstr);
 		exists $cls->{from_pointer} or do {
 			logmsg("Class $hclass can't retrieve objects from pointers.");
@@ -964,6 +967,46 @@ sub parse_hdata {
 =cut
 }
 
+sub parse_input
+{
+	my ($client, $id, $arguments) = @_;
+	my ($target, $input);
+	if ($arguments =~ m/^([^ ]+) (.*)$/)
+	{
+		($target, $input) = ($1, $2);
+	}
+	else
+	{
+		logmsg("Bad INPUT message");
+	}
+	my $buf;
+	if ($target =~ m/^0x/)
+	{
+		use integer;
+		no warnings 'portable'; # I MEAN IT
+		my $ptr = hex($target);
+		$buf = $hdata_classes{buffer}->{from_pointer}->($ptr);
+	}
+	else
+	{
+		my @w = Irssi::windows();
+		my ($w) = grep {
+			my ($wi) = $_->items();
+			if(defined($wi)) {
+				my $s = $wi->{server};
+				$target eq 'irc.' . $s->{address} . "." . $wi->{name};
+			}
+			else { $target eq 'irc.' . $_->{name}; }
+		} @w;
+		$buf = $w;
+	}
+	$buf//return;
+	#$buf->command($input);
+	my $s = $buf->{active_server};
+	my $wi = $buf->{active};
+	Irssi::signal_emit("send command", $input, $s, $wi);
+}
+
 sub process_message {
     my ($client, $message) = @_;
 
@@ -993,6 +1036,8 @@ sub process_message {
     } elsif ($command eq 'hdata') {
         logmsg("HDATA: $message");
         parse_hdata($client, $id, $arguments);
+    } elsif ($command eq 'input') {
+        parse_input($client, $id, $arguments);
     } else {
         logmsg("Unhandled: $message");
         logmsg("ID: $id COMMAND: $command ARGS: $arguments");
