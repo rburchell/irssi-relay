@@ -315,6 +315,8 @@ sub hpath_tok {
 # from_pointer : Subroutine called when the top-level list item is a pointer address. The pointer (as an integer) is passed.
 #   Return value should be the object in question. Return undef if no such object.
 # get_pointer : Subroutine called to get a pointer value from an object.
+my %line_ptr_cache; # The from_pointer algo for line is stupid because we have to literally do a mass search of all lines in all buffers.
+	# this hash exists so that gui_print_line_finished can short-circuit the whole damn thing.
 my %hdata_classes = (
 	buffer => {
 		list_gui_buffers => sub {
@@ -682,6 +684,20 @@ my %hdata_classes = (
 			my ($buf, $l) = @$bl;
 			return $l->{_irssi};
 		},
+		from_pointer => sub {
+			my ($ptr) = @_;
+			if (exists($line_ptr_cache{$ptr})) { return $line_ptr_cache{$ptr}; }
+			my @w = Irssi::windows();
+			my @b = map { $_->view()->{buffer} } @w;
+			for my $buf (@b) {
+				for (my $l = $b->{first_line}; defined($l); $l = $l->next()) {
+					if ($l->{_irssi} eq $ptr) {
+						return [$buf, $l];
+					}
+				}
+			}
+			return undef;
+		},
 		type_sublist_data => 'line_data',
 	},
 	line_data => {
@@ -689,6 +705,20 @@ my %hdata_classes = (
 			my ($bl, $ct) = @_;
 			my ($buf, $l) = @$bl;
 			return $l->{_irssi};
+		},
+		from_pointer => sub {
+			my ($ptr) = @_;
+			if (exists($line_ptr_cache{$ptr})) { return $line_ptr_cache{$ptr}; }
+			my @w = Irssi::windows();
+			my @b = map { $_->view()->{buffer} } @w;
+			for my $buf (@b) {
+				for (my $l = $b->{first_line}; defined($l); $l = $l->next()) {
+					if ($l->{_irssi} eq $ptr) {
+						return [$buf, $l];
+					}
+				}
+			}
+			return undef;
 		},
 		type_key_buffer => 'ptr',
 		key_buffer => sub {
@@ -736,6 +766,8 @@ my %hdata_classes = (
 
 sub parse_hdata {
 	use integer;
+	# IMPORTANT: $client CAN BE UNDEFINED - THIS IS DONE IN THE EVENT HANDLERS
+	# WHEN THIS HAPPENS WE *RETURN* THE BUILT RESPONSE MESSAGE INSTEAD OF SENDING IT.
 	my ($client, $id, $arguments) = @_;
 
     # OK Gory details of what an hdata path looks like:
@@ -794,7 +826,6 @@ sub parse_hdata {
 			return;
 		};
 		my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
-		#$objs{$ptr} = $obj;
 		@objs = ($ptr => $obj);
 	}
 	else
@@ -803,7 +834,7 @@ sub parse_hdata {
 			logmsg("List $objstr not defined for $hclass");
 			return;
 		};
-		logmsg("Got a HDATA for $ct $path from list $objstr from $hclass with keys @keys");
+		#logmsg("Got a HDATA for $ct $path from list $objstr from $hclass with keys @keys");
 		my @obj = ($cls->{"list_$objstr"}->($ct));
 		# We can technically legitimately return no objects on some lists.
 		#unless (@obj) {
@@ -812,7 +843,6 @@ sub parse_hdata {
 		#}
 		for my $obj (@obj) {
 			my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
-			#$objs{$ptr} = $obj;
 			push @objs, ($ptr => $obj);
 		}
 	}
@@ -845,8 +875,7 @@ sub parse_hdata {
 			for my $r (@r)
 			{
 				my $newp = $ptr . "/" . sprintf("%016x", ($newcls->{get_pointer}->($r)));
-				logmsg($newp);
-				#$results{$newp} = $r;
+				#logmsg($newp);
 				push @results, ($newp => $r);
 			}
 		}
@@ -858,14 +887,14 @@ sub parse_hdata {
 
 	if (@keys < 1)
 	{
-		logmsg("Getting all keys from $hclass");
+		#logmsg("Getting all keys from $hclass");
 		@keys = map { /^key_(.*)$/ && $1 } grep { /^key_/ && exists $cls->{"type_$_"} } keys %$cls;
-		logmsg("Keys: @keys");
+		#logmsg("Keys: @keys");
 	}
 	else
 	{
 		@keys = grep { exists $cls->{"key_$_"} && exists $cls->{"type_key_$_"} } @keys;
-		logmsg("Actual defined keys: @keys");
+		#logmsg("Actual defined keys: @keys");
 	}
 
 	@keytypes = map { $_ . ":" . $cls->{"type_key_$_"} } @keys;
@@ -887,6 +916,7 @@ sub parse_hdata {
 		my $obj = $objs[$oix + 1];
 		for my $pptr (@ppath)
 		{
+			no warnings 'portable'; # I MEAN IT.
 			$m->add_ptr(hex($pptr));
 		}
 		for my $k (@keys)
@@ -895,76 +925,37 @@ sub parse_hdata {
 		}
 	}
 
-	sendto_client($client, $m->get_buffer());
+	if (defined($client))
+	{
+		sendto_client($client, $m->get_buffer());
+		return;
+	}
+	else
+	{
+		return $m;
+	}
+}
 
-	return;
-
-    # POD out w00t's version for mine
-=if0
-    # $arguments = "hotlist:gui_hotlist(*)"
-    # hdata_head here will be "hotlist"
-    # everything after the : is split on '/' and put into list_path
-    # list_path[0] is the important bit
-
-
-    my $hdata_head = $1;
-    my $hdata_tail = $2;
-    my $keys = "";
-    if (defined($4)) {
-        $keys = $4
-    }
-    my @list_path = split('/', $hdata_tail);
-
-    if ($list_path[0] =~ /\(?((0x[0-9A-Fa-f]+))\)?/) {
-        logmsg("Got a HDATA for pointer $1 of $hdata_head for keys $keys");
-        return;
-    } else {
-        logmsg("Got a HDATA for HEAD of $hdata_head for keys $keys");
-        return;
-    }
-
-    # build return path..
-    my $return_path = $hdata_head;
-    for (my $i = 1; $i < length(scalar @list_path); $i++) {
-        # TODO: skip ()s, verify it exists
-        $return_path .= "/" . $list_path[$i];
-    }
-
-    my $hdata_types {
-
-    }
-
- #   if ($keys eq "") {
- #       # TODO: get keys from hdata_head definition
- #       buffer:
- #       htb:local_variables
- #       notify:int
- #       number:int
- #       full_name:string
- #       short_name:string
- #       title:string
- #       hidden:int
- #       type:int
-#    }
-
-    my $klist = split(",", $keys);
-
-    # build list of key types..
-    my $key_types = "";
-#    for (my $i = 0; $i < length($klist); $i++) {
-#        $key_types .= $klist[$i] . ":" . "str"; # TODO: proper type
-#    }
-
-    my $obj = WeechatMessage::new();
-    $obj->add_string($id);
-    $obj->add_type("hda");
-    $obj->add_string($return_path);
-    $obj->add_string($key_types); # keys
-    $obj->add_int(0); # count
-
-    sendto_client($client, $obj->get_buffer());
-
-=cut
+sub get_window_from_weechat_name
+{
+	my ($name) = @_;
+	#key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { $m->add_string('irc.' . $w->{name}); } },
+	for my $w (Irssi::windows())
+	{
+		my @wi = $w->items();
+		for my $wi (@wi)
+		{
+			my $s = $wi->{server};
+			if ($name eq 'irc.' . $s->{address} . "." . $wi->{name}) {
+				return $w;
+			}
+		}
+		if ($name eq 'irc.' . $w->{name})
+		{
+			return $w;
+		}
+	}
+	return undef;
 }
 
 sub parse_input
@@ -989,22 +980,140 @@ sub parse_input
 	}
 	else
 	{
-		my @w = Irssi::windows();
-		my ($w) = grep {
-			my ($wi) = $_->items();
-			if(defined($wi)) {
-				my $s = $wi->{server};
-				$target eq 'irc.' . $s->{address} . "." . $wi->{name};
-			}
-			else { $target eq 'irc.' . $_->{name}; }
-		} @w;
-		$buf = $w;
+		$buf = get_window_from_weechat_name($target);
 	}
 	$buf//return;
 	#$buf->command($input);
 	my $s = $buf->{active_server};
 	my $wi = $buf->{active};
 	Irssi::signal_emit("send command", $input, $s, $wi);
+}
+
+my %subscribers;
+
+sub parse_sync {
+	my ($client, $id, $arguments) = @_;
+	my ($buffer, %events);
+	if ($arguments =~ m/^\s*$/)
+	{
+		$buffer = '*';
+		%events = (buffers => 1, upgrade => 1, buffer => 1, nicklist => 1);
+	}
+	elsif ($arguments =~ m/^([^ ]+)$/)
+	{
+		$buffer = $1;
+		if ($buffer eq '*')
+		{
+			%events = (buffers => 1, upgrade => 1, buffer => 1, nicklist => 1);
+		}
+		else
+		{
+			%events = (buffer => 1, nicklist => 1);
+		}
+	}
+	elsif ($arguments =~ m/^([^ ]+) ([^ ]+)/)
+	{
+		$buffer = $1;
+		%events = map { $_ => 1 } split /,/, $2;
+	}
+	if ($buffer ne "*")
+	{
+		my $w = get_window_from_weechat_name($buffer);
+		$w//return;
+		$buffer = $w->{_irssi};
+	}
+
+	for my $evt (keys %events)
+	{
+		if ($events{$evt})
+		{
+			logmsg("Subscribing $client to $evt from $buffer");
+			$subscribers{$evt}->{$buffer}->{$client} = $client;
+		}
+	}
+}
+
+sub parse_desync {
+	my ($client, $id, $arguments) = @_;
+	my ($buffer, %events);
+	if ($arguments =~ m/^\s*$/)
+	{
+		$buffer = '*';
+		%events = (buffers => 1, upgrade => 1, buffer => 1, nicklist => 1);
+	}
+	elsif ($arguments =~ m/^([^ ]+)$/)
+	{
+		$buffer = $1;
+		if ($buffer eq '*')
+		{
+			%events = (buffers => 1, upgrade => 1, buffer => 1, nicklist => 1);
+		}
+		else
+		{
+			%events = (buffer => 1, nicklist => 1);
+		}
+	}
+	elsif ($arguments =~ m/^([^ ]+) (.*)$/)
+	{
+		$buffer = $1;
+		%events = map { $_ => 1 } split /,/, $2;
+	}
+	if ($buffer ne "*")
+	{
+		my $w = get_window_from_weechat_name($buffer);
+		$w//return;
+		$buffer = $w->{_irssi};
+	}
+
+	for my $evt (keys %events)
+	{
+		if ($events{$evt})
+		{
+			logmsg("Unsubscribing $client from $evt from $buffer");
+			delete $subscribers{$evt}->{$buffer}->{$client};
+		}
+	}
+}
+
+sub dispatch_event_message
+{
+	my ($event, $buffer, $data) = @_;
+	$buffer//="*";
+
+	my %clients = ();
+
+	if (exists $subscribers{$event})
+	{
+		if (exists $subscribers{$event}->{"*"})
+		{
+			%clients = %{$subscribers{$event}->{"*"}};
+		}
+		if ($buffer ne '*' && exists $subscribers{$event}->{$buffer})
+		{
+			for my $k (keys %{$subscribers{$event}->{$buffer}}) {
+				$clients{$k} = $subscribers{$event}->{$buffer}->{$k};
+			}
+		}
+	}
+	
+	logmsg("Dispatching to " . scalar(keys %clients) . " subscribers");
+
+	for my $k (keys %clients)
+	{
+		my $cli = $clients{$k};
+		sendto_client($cli, $data);
+	}
+}
+
+sub desync_client {
+	my ($client) = @_;
+	for my $event (keys %subscribers)
+	{
+		for my $buffer (keys %{$subscribers{$event}})
+		{
+			delete $subscribers{$event}->{$buffer}->{$client};
+		}
+	}
 }
 
 sub process_message {
@@ -1038,6 +1147,10 @@ sub process_message {
         parse_hdata($client, $id, $arguments);
     } elsif ($command eq 'input') {
         parse_input($client, $id, $arguments);
+    } elsif ($command eq 'sync') {
+        parse_sync($client, $id, $arguments);
+    } elsif ($command eq 'desync') {
+        parse_desync($client, $id, $arguments);
     } else {
         logmsg("Unhandled: $message");
         logmsg("ID: $id COMMAND: $command ARGS: $arguments");
@@ -1049,36 +1162,19 @@ my $wants_hilight_message = {};
 sub gui_print_text_finished {
     my ($window) = @_;
     my $ref = $window->{'refnum'}; 
-    my $color_line = $window->view->{buffer}->{cur_line}->get_text(1);
-    my $plain_line = $window->view->{buffer}->{cur_line}->get_text(0);
+    my $buf = $window->view()->{buffer};
+    my $line = $buf->{cur_line};
 
-    while (my ($client, $chash) = each %clients) {
-        my $line = $plain_line;
+    my $ptr = sprintf("%016x", $line->{_irssi});
 
-        if($chash->{'color'}) {
-            $line = $color_line;
-        }
+    # local not my since we're doing it to a hash element
+    local $line_ptr_cache{$line->{_irssi}} = [$buf, $line];
 
-        if ($wants_hilight_message->{$ref}) {
-            #sendto_client($chash->{'client'}, {
-            #  event => 'hilight',
-            #   window => $ref,
-            #    line => $line,
-            #  });
-        }
-
-        #sendto_client($chash->{'client'}, {
-        #   event => 'addline',
-        #    window => $ref,
-        #     line => $line,
-#    });
-    }
-
-    if ($wants_hilight_message->{$ref}) {
-        delete $wants_hilight_message->{$ref};
-    }
+    my $m = parse_hdata(undef, "_buffer_line_added", "line_data:0x$ptr");
+    dispatch_event_message("buffer" => $window->{_irssi}, $m->get_buffer());
 }
 
+=pod
 sub configure {
     my ($client, $event) = @_;
     my $chash = $clients{$client};
@@ -1089,9 +1185,17 @@ sub configure {
         }
     }
 }
+=cut
 
 sub window_created {
     my $window = shift;
+    use integer;
+
+    my $ptr = sprintf("%016x", $window->{_irssi});
+
+    my $m = parse_hdata(undef, "_buffer_opened", "buffer:0x$ptr");
+
+    dispatch_event_message(buffers => "*", $m->get_buffer());
 
     #sendto_all_clients({
     #  event => 'addwindow',
@@ -1102,6 +1206,17 @@ sub window_created {
 
 sub window_destroyed {
     my $window = shift;
+    use integer;
+
+    my $ptr = sprintf("%016x", $window->{_irssi});
+    my $m = parse_hdata(undef, "_buffer_closing", "buffer:0x$ptr");
+
+    dispatch_event_message(buffers => "*", $m->get_buffer());
+
+    for my $evt (keys %subscribers)
+    {
+	    delete $subscribers{$evt}->{$window->{_irssi}}; # Auto-remove all window subscriptions
+    }
 
     # sendto_all_clients({
     #   event => 'delwindow',
@@ -1129,6 +1244,10 @@ sub window_hilight {
 
 sub window_refnum_changed {
     my ($window, $oldnum) = @_;
+
+    my $ptr = sprintf("%016x", $window->{_irssi});
+    my $m = parse_hdata(undef, "_buffer_moved", "buffer:0x$ptr");
+    dispatch_event_message(buffers => "*", $m->get_buffer());
 
     #sendto_all_clients({
     #  event => 'renumber',
