@@ -59,7 +59,14 @@ sub mojoify {
     $ENV{MOJO_REUSE} = 1;
 
     # Mojo likes to spew, this makes irssi mostly unsuable
-    app->log->level('fatal');
+    my $logdir = Irssi::get_irssi_dir() . "/log";
+    unless (-e $logdir) { mkdir $logdir; }
+    if (!-d $logdir) { warn "Log directory is not a directory"; app->log(Mojo::Log->new("/dev/null")); }
+    else {
+	    app->log(Mojo::Log->new(path => "$logdir/weechat-relay.log"));
+    }
+
+    app->log->level('debug');
 
     app->static->paths->[0] = Irssi::settings_get_str('ipw_docroot');
     my $listen_url;
@@ -117,7 +124,8 @@ my %clients = ();
 
 sub logmsg {
     my $msg = shift;
-    Irssi::printformat(MSGLEVEL_CLIENTCRAP, 'irssi_proxy_websocket', $msg);
+#    Irssi::printformat(MSGLEVEL_CLIENTCRAP, 'irssi_proxy_websocket', $msg);
+    app->log->info($msg);
 }
 
 websocket '/weechat' => sub {
@@ -207,6 +215,7 @@ package WeechatMessage {
     sub add_chr {
         my ($self, $chr) = @_;
 	$self->{buf} .= pack("c", $chr);
+	return $self;
     }
 
     sub add_string {
@@ -215,9 +224,17 @@ package WeechatMessage {
 	return $self;
     }
 
+    sub add_string_shortlength {
+        my ($self, $string) = @_;
+	$self->{buf} .= pack("c/a", $string);
+	return $self;
+    }
+
     sub add_ptr {
 	my ($self, $ptr) = @_;
-	$self->{buf} .= pack("c/a", sprintf("%016x", $ptr));
+	#$self->{buf} .= pack("c/a", sprintf("%016x", $ptr));
+	$self->add_string_shortlength(sprintf("%016x", $ptr));
+	return $self;
     }
 
     sub add_type {
@@ -245,7 +262,7 @@ package WeechatMessage {
         my $retbuf = pack("N", 4+length($retval)) . $retval;
 	local $Data::Dumper::Terse = 1;
 	local $Data::Dumper::Useqq = 1;
-	warn "Buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']);
+	Irssi::Script::weechat_relay::logmsg("Buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']));
         return $retbuf;
     }
 
@@ -479,7 +496,34 @@ my %hdata_classes = (
 			$m->add_int(0);
 		},
 	},
-
+	# TODO TODO TODO What the heck is hotlist? For now returning empties.
+	hotlist => {
+		list_gui_hotlist => sub {
+			my ($ct) = @_;
+			return ();
+		},
+		type_key_priority => 'int',
+		key_priority => sub {
+			my ($o, $m) = @_;
+			$m->add_int(0);
+		},
+		type_key_creation_time => 'tim',
+		key_creation_time => sub {
+			my ($o, $m) = @_;
+			$m->add_string_shortlength("0");
+		},
+		type_key_buffer => 'ptr',
+		key_buffer => sub {
+			my ($o, $m) = @_;
+			$m->add_ptr(0);
+		},
+		type_key_count => 'arr',
+		key_count => sub {
+			my ($o, $m) = @_;
+			$m->add_type("int");
+			$m->add_int(0);
+		},
+	},
 );
 
 sub parse_hdata {
@@ -550,10 +594,11 @@ sub parse_hdata {
 		};
 		logmsg("Got a HDATA for $ct $path from list $objstr from $hclass with keys @keys");
 		my @obj = ($cls->{"list_$objstr"}->($ct));
-		unless (@obj) {
-			logmsg("No objects returned for list $objstr from $hclass");
-			return;
-		}
+		# We can technically legitimately return no objects on some lists.
+		#unless (@obj) {
+		#		logmsg("No objects returned for list $objstr from $hclass");
+		#		return;
+		#}
 		for my $obj (@obj) {
 			my $ptr = sprintf("%016x", ($cls->{get_pointer}->($obj)));
 			$objs{$ptr} = $obj;
@@ -613,7 +658,7 @@ sub parse_hdata {
 	$m->add_type("hda");
 	$m->add_string($hclass);
 	$m->add_string(join ",", @keytypes);
-	$m->add_int(length keys %objs);
+	$m->add_int(scalar keys %objs);
 
 	for my $ptr (keys %objs)
 	{
