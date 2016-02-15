@@ -21,6 +21,8 @@ use Mojo::Server::Daemon;
 use File::Basename 'dirname';
 use File::Spec;
 
+use Carp ();
+
 my $have_compression = 0;
 BEGIN {
 	eval {
@@ -247,6 +249,7 @@ package WeechatMessage {
 	my ($self, $ptr) = @_;
 	#$self->{buf} .= pack("c/a", sprintf("%016x", $ptr));
 	use integer;
+	defined($ptr) or Carp::cluck("Attempting to add an undefined pointer value");
 	$self->add_string_shortlength(sprintf("%016x", $ptr));
 	return $self;
     }
@@ -386,11 +389,49 @@ my %hdata_classes = (
 		key_layout_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); },
 		type_key_layout_number_merge_order => 'int',
 		type_key_name => 'str',
-		key_name => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; if(defined($wi)) { my $s = $wi->{server}; $m->add_string($s->{address} . "." . $wi->{name}); } else { $m->add_string($w->{name}); } },
+		key_name => sub {
+			my ($w, $m) = @_;
+			my ($wi) = $w->{active};
+			if(defined($wi)) {
+				my $s = $wi->{server};
+				$m->add_string($s->{address} . "." . $wi->{name});
+			}
+			elsif ($w->{name}//"" ne '') {
+				$m->add_string($w->{name});
+			}
+			else {
+				$m->add_string("nameless-" . $w->{refnum});
+			}
+		},
 		type_key_full_name => 'str',
-		key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { $m->add_string('irc.' . $w->{name}); } },
+		key_full_name => sub {
+			my ($w, $m) = @_;
+			my ($wi) = $w->{active};
+			if(defined($wi)) {
+				my $s = $wi->{server};
+				$m->add_string('irc.' . $s->{address} . "." . $wi->{name});
+			}
+			elsif ($w->{name}//"" ne '') {
+				$m->add_string('irc.' . $w->{name});
+			}
+			else {
+				$m->add_string('noname.nameless-' . $w->{refnum});
+			}
+		},
 		type_key_short_name => 'str',
-		key_short_name => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; if(defined($wi)) { $m->add_string($wi->{name}); } else { $m->add_string($w->{name}); } },
+		key_short_name => sub {
+			my ($w, $m) = @_;
+			my ($wi) = $w->{active};
+			if(defined($wi)) {
+				$m->add_string($wi->{name});
+			}
+			elsif ($w->{name}//"" ne '') {
+				$m->add_string($w->{name});
+			}
+			else {
+				$m->add_string('nameless-' . $w->{refnum});
+			}
+		},
 		type_key_type => 'int',
 		key_type => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; $m->add_int(1); }, # GUI_BUFFER_TYPE_FREE
 		type_key_notify => 'int',
@@ -784,7 +825,7 @@ sub parse_hdata {
 	use integer;
 	# IMPORTANT: $client CAN BE UNDEFINED - THIS IS DONE IN THE EVENT HANDLERS
 	# WHEN THIS HAPPENS WE *RETURN* THE BUILT RESPONSE MESSAGE INSTEAD OF SENDING IT.
-	my ($client, $id, $arguments) = @_;
+	my ($client, $id, @arguments) = @_;
 
     # OK Gory details of what an hdata path looks like:
     # The first token before the : is the "root class"
@@ -803,6 +844,9 @@ sub parse_hdata {
     #   -N gives the previous N items,
     #   * is basically "the rest of the list". The example shows ussing (*) on first_line but
     #   first_line isn't a list, so really it gets treated like "a list of one"
+
+        return unless @arguments > 0;
+	my $arguments = pop @arguments;
 
 	my $count = () = $arguments =~ /(.+):([^ ]+)( (.+))?/;
 	if ($count eq 0) {
@@ -826,7 +870,12 @@ sub parse_hdata {
 
 	my @objs;
 
-	if ($objstr =~ m/^0x/)
+	if (scalar(@arguments) > 0)
+	{
+		logmsg("Got a internal HDATA for $path from objects of $hclass with keys @keys");
+		@objs = map { $cls->{get_pointer}->($_) => $_ } @arguments;
+	}
+	elsif ($objstr =~ m/^0x/)
 	{
 		logmsg("Got a HDATA for $path from pointer $objstr of $hclass with keys @keys");
 		# Pointer value
@@ -850,7 +899,7 @@ sub parse_hdata {
 			logmsg("List $objstr not defined for $hclass");
 			return;
 		};
-		#logmsg("Got a HDATA for $ct $path from list $objstr from $hclass with keys @keys");
+		logmsg("Got a HDATA for $ct $path from list $objstr from $hclass with keys @keys");
 		my @obj = ($cls->{"list_$objstr"}->($ct));
 		# We can technically legitimately return no objects on some lists.
 		#unless (@obj) {
@@ -1093,25 +1142,32 @@ sub parse_desync {
 
 sub dispatch_event_message
 {
-	my ($event, $buffer, $data) = @_;
-	$buffer//="*";
+	my ($data, @targets) = @_;
 
 	my %clients = ();
 
-	if (exists $subscribers{$event})
+	while (@targets > 0)
 	{
-		if (exists $subscribers{$event}->{"*"})
+		my $event = shift @targets;
+		my $buffer = shift @targets;
+		$buffer//="*";
+		if (exists $subscribers{$event})
 		{
-			%clients = %{$subscribers{$event}->{"*"}};
-		}
-		if ($buffer ne '*' && exists $subscribers{$event}->{$buffer})
-		{
-			for my $k (keys %{$subscribers{$event}->{$buffer}}) {
-				$clients{$k} = $subscribers{$event}->{$buffer}->{$k};
+			if (exists $subscribers{$event}->{"*"})
+			{
+				for my $k (keys %{$subscribers{$event}->{'*'}}) {
+					$clients{$k} = $subscribers{$event}->{'*'}->{$k};
+				}
+			}
+			if ($buffer ne '*' && exists $subscribers{$event}->{$buffer})
+			{
+				for my $k (keys %{$subscribers{$event}->{$buffer}}) {
+					$clients{$k} = $subscribers{$event}->{$buffer}->{$k};
+				}
 			}
 		}
 	}
-	
+
 	logmsg("Dispatching to " . scalar(keys %clients) . " subscribers");
 
 	for my $k (keys %clients)
@@ -1140,23 +1196,24 @@ sub parse_nicklist {
 	logmsg("Got NICKLIST ($id) for $arguments");
 	if (ref($arguments) && $arguments->DOES("Irssi::Window"))
 	{
-		@buf = [$arguments, $arguments->{active}//return];
+		$arguments->{_irssi} or do { Carp::cluck("Why is this undefined?"); };
+		@buf = [$arguments, $arguments->{active}];
 	}
 	elsif (($bufarg) = ($arguments =~ m/^([^ ]+)/)) {
 		if ($bufarg =~ m/^0x/) {
 			use integer;
 			no warnings 'portable'; # I MEAN IT
 			my $w = $hdata_classes{buffer}->{from_pointer}->(hex($bufarg));
-			@buf = [$w, $w->{active}//return];
+			@buf = [$w, $w->{active}];
 		} else {
 			use integer;
 			my $w = get_window_from_weechat_name($bufarg);
-			@buf = [$w, $w->{active}//return];
+			@buf = [$w, $w->{active}];
 		}
 	}
 	else
 	{
-		@buf = grep { defined($_->[1]) } map { [$_, $_->{active}] } Irssi::windows();
+		@buf = map { [$_, $_->{active}] } Irssi::windows();
 	}
 	my $m = WeechatMessage->new();
 	$m->add_string($id);
@@ -1169,7 +1226,20 @@ sub parse_nicklist {
 	for my $buf (@buf)
 	{
 		my ($w, $wi) = @$buf;
-		$wi->DOES("Irssi::Irc::Channel") or next;
+		unless (defined($wi) && $wi->DOES("Irssi::Irc::Channel"))
+		{
+			# Send an empty nicklist and go. We need this because if someone has channels and queries on a single window,
+			# if they switch to a query we should push an empty nicklist.
+			++$objct;
+			my $ptr = $w->{_irssi};
+			$ptr//do{Carp::carp("Why is this undefined?"); next;};
+			$m->add_ptr($w->{_irssi})->add_ptr($w->{_irssi}); # path
+			$m->add_chr(1); # group
+			$m->add_chr(0); # visible
+			$m->add_int(0); # level
+			$m->add_string("root")->add_string(undef)->add_string(undef)->add_string(undef);
+			next;
+		}
 		my %nicks = map { $_->{nick} => $_ } $wi->nicks();
 		my $pfxraw = $wi->{server}->isupport("PREFIX")//"(ov)@+";
 		my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
@@ -1177,7 +1247,7 @@ sub parse_nicklist {
 		my $grpct = 1;
 		# Add nicklist root
 		++$objct;
-		$m->add_ptr($w->{_irssi})->add_ptr($wi->{_irssi}); # path
+		$m->add_ptr($w->{_irssi})->add_ptr($w->{_irssi}); # path
 		$m->add_chr(1); # group
 		$m->add_chr(0); # visible
 		$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
@@ -1329,7 +1399,12 @@ sub process_message {
 
 my $wants_hilight_message = {};
 
+our $_ugh = 0;
 sub gui_print_text_finished {
+	local $SIG{__WARN__} = \&logmsg;
+	$_ugh and return;
+	local $_ugh = 1;
+	eval {
     my ($window) = @_;
     my $ref = $window->{'refnum'}; 
     my $buf = $window->view()->{buffer};
@@ -1337,11 +1412,10 @@ sub gui_print_text_finished {
 
     my $ptr = sprintf("%016x", $line->{_irssi});
 
-    # local not my since we're doing it to a hash element
-    local $line_ptr_cache{$line->{_irssi}} = [$buf, $line];
-
-    my $m = parse_hdata(undef, "_buffer_line_added", "line_data:0x$ptr");
-    dispatch_event_message("buffer" => $window->{_irssi}, $m->get_buffer());
+    my $m = parse_hdata(undef, "_buffer_line_added", [$buf, $line], "line_data:0xINARGS");
+    dispatch_event_message($m->get_buffer(), buffer => $window->{_irssi});
+    };
+    if ($@) { logmsg("ERROR IN PRINT TEXT HANDLER !!! !!! !!! $@"); }
 }
 
 =pod
@@ -1361,11 +1435,9 @@ sub window_created {
     my $window = shift;
     use integer;
 
-    my $ptr = sprintf("%016x", $window->{_irssi});
+    my $m = parse_hdata(undef, "_buffer_opened", $window, "buffer:0xINARGS number,full_name,short_name,nicklist,title,local_variables,prev_buffer,next_buffer");
 
-    my $m = parse_hdata(undef, "_buffer_opened", "buffer:0x$ptr");
-
-    dispatch_event_message(buffers => "*", $m->get_buffer());
+    dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
 
     #sendto_all_clients({
     #  event => 'addwindow',
@@ -1378,10 +1450,9 @@ sub window_destroyed {
     my $window = shift;
     use integer;
 
-    my $ptr = sprintf("%016x", $window->{_irssi});
-    my $m = parse_hdata(undef, "_buffer_closing", "buffer:0x$ptr");
+    my $m = parse_hdata(undef, "_buffer_closing", $window, "buffer:0xINARGS number,full_name");
 
-    dispatch_event_message(buffers => "*", $m->get_buffer());
+    dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
 
     for my $evt (keys %subscribers)
     {
@@ -1415,9 +1486,8 @@ sub window_hilight {
 sub window_refnum_changed {
     my ($window, $oldnum) = @_;
 
-    my $ptr = sprintf("%016x", $window->{_irssi});
-    my $m = parse_hdata(undef, "_buffer_moved", "buffer:0x$ptr");
-    dispatch_event_message(buffers => "*", $m->get_buffer());
+    my $m = parse_hdata(undef, "_buffer_moved", $window, "buffer:0xINARGS number,full_name,prev_buffer,next_buffer");
+    dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
 
     #sendto_all_clients({
     #  event => 'renumber',
@@ -1426,24 +1496,53 @@ sub window_refnum_changed {
 #  });
 }
 
-Irssi::signal_add("gui print text finished", "gui_print_text_finished");
+sub window_item_name_changed {
+	my ($witem) = @_;
+	my $w = $witem->window();
+	my $m = parse_hdata(undef, "_buffer_renamed", $w, "buffer:0xINARGS number,full_name,short_name,local_variables");
+	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+	if ($w->DOES("Irssi::Irc::Query")) {
+		$m = parse_hdata(undef, "_buffer_title_changed", $w, "buffer:0xINARGS number,full_name,title");
+		dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+	}
+}
 
-Irssi::signal_add("window created", "window_created");
-Irssi::signal_add("window destroyed", "window_destroyed");
-Irssi::signal_add("window activity", "window_activity");
-Irssi::signal_add_first("window hilight", "window_hilight");
-Irssi::signal_add("window refnum changed", "window_refnum_changed");
+sub window_item_changed {
+	my ($window, $witem) = @_;
+	# First announce the window rename.
+	my $m = parse_hdata(undef, "_buffer_renamed", $window, "buffer:0xINARGS number,full_name,short_name,local_variables");
+	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+	$m = parse_nicklist(undef, "_nicklist", $window);
+	dispatch_event_message($m->get_buffer(), nicklist => $window->{_irssi});
+}
 
-Irssi::signal_add("setup changed", "setup_changed");
+sub window_title_changed {
+	my ($witem) = @_;
+	my $w = $witem->window();
+	my $m = parse_hdata(undef, "_buffer_title_changed", $w, "buffer:0xINARGS number,full_name,title");
+	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+}
+
+Irssi::signal_add("gui print text finished" => \&gui_print_text_finished);
+
+Irssi::signal_add("window created" => \&window_created);
+Irssi::signal_add("window destroyed" => \&window_destroyed);
+Irssi::signal_add("window activity" => \&window_activity);
+Irssi::signal_add_first("window hilight" => \&window_hilight);
+Irssi::signal_add("window refnum changed" => \&window_refnum_changed);
+Irssi::signal_add_last("window item name changed" => \&window_item_name_changed);
+Irssi::signal_add_last("query address changed" => \&window_title_changed);
+Irssi::signal_add_last("channel topic changed" => \&channel_topic_changed);
+Irssi::signal_add_last("window item changed" => \&window_item_changed);
+
+Irssi::signal_add("setup changed", \&setup_changed);
 
 sub UNLOAD {
     Irssi::timeout_remove($loop_id);
-    Irssi::signal_remove("gui print text finished", "gui_print_text_finished");
-    Irssi::signal_remove("window created", "window_created");
-    Irssi::signal_remove("window destroyed", "window_destroyed");
-    Irssi::signal_remove("window activity", "window_activity");
     # TODO: is daemon cleared up properly? and finish this
     $daemon->stop();
+    my @c = values %clients;
+    $_->finish() for @c;
     # Symbol::delete_package("WeechatMessage");
 }
 
