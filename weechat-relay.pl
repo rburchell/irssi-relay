@@ -142,6 +142,7 @@ websocket '/weechat' => sub {
     $client->on(finish => sub {
             # delete first, otherwise we'll try tell the client about their disconnect,
             # which will be rather painful.
+	    desync_client($client);
             delete $clients{$client};
             logmsg("Client disconnected: " . $client->tx->remote_address);
     });
@@ -208,6 +209,12 @@ package WeechatMessage {
 	return $self;
     }
 
+    sub set_int {
+	    my ($self, $pos, $int) = @_;
+	    substr($self->{buf}, $pos, 4) = pack("i>", $int);
+	    return $self;
+    }
+
     sub add_uint {
         my ($self, $uint) = @_;
         $self->{buf} .= pack("N", $uint);
@@ -222,7 +229,11 @@ package WeechatMessage {
 
     sub add_string {
         my ($self, $string) = @_;
-        $self->{buf} .= pack("i>/a", $string);
+	if (defined($string)) {
+	        $self->{buf} .= pack("i>/a", $string);
+	} else {
+		$self->add_int(-1); # sz 0xFFFFFFFF == NULL string.
+	}
 	return $self;
     }
 
@@ -272,6 +283,11 @@ package WeechatMessage {
     sub get_raw_buffer {
 	    my ($self) = @_;
 	    return $self->{buf};
+    }
+
+    sub get_length {
+	    my ($self) = @_;
+	    return length $self->{buf};
     }
 }
 
@@ -370,13 +386,13 @@ my %hdata_classes = (
 		key_layout_number => sub { my ($w, $m) = @_; $m->add_int($w->{refnum}); },
 		type_key_layout_number_merge_order => 'int',
 		type_key_name => 'str',
-		key_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string($s->{address} . "." . $wi->{name}); } else { $m->add_string($w->{name}); } },
+		key_name => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; if(defined($wi)) { my $s = $wi->{server}; $m->add_string($s->{address} . "." . $wi->{name}); } else { $m->add_string($w->{name}); } },
 		type_key_full_name => 'str',
-		key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { $m->add_string('irc.' . $w->{name}); } },
+		key_full_name => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; if(defined($wi)) { my $s = $wi->{server}; $m->add_string('irc.' . $s->{address} . "." . $wi->{name}); } else { $m->add_string('irc.' . $w->{name}); } },
 		type_key_short_name => 'str',
-		key_short_name => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if(defined($wi)) { $m->add_string($wi->{name}); } else { $m->add_string($w->{name}); } },
+		key_short_name => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; if(defined($wi)) { $m->add_string($wi->{name}); } else { $m->add_string($w->{name}); } },
 		type_key_type => 'int',
-		key_type => sub { my ($w, $m) = @_; my ($wi) = $w->items(); $m->add_int(1); }, # GUI_BUFFER_TYPE_FREE
+		key_type => sub { my ($w, $m) = @_; my ($wi) = $w->{active}; $m->add_int(1); }, # GUI_BUFFER_TYPE_FREE
 		type_key_notify => 'int',
 		key_notify => sub {
 			my ($w, $m) = @_;
@@ -1116,6 +1132,119 @@ sub desync_client {
 	}
 }
 
+sub parse_nicklist {
+	use integer;
+	my ($client, $id, $arguments) = @_;
+	my @buf;
+	my $bufarg;
+	logmsg("Got NICKLIST ($id) for $arguments");
+	if (ref($arguments) && $arguments->DOES("Irssi::Window"))
+	{
+		@buf = [$arguments, $arguments->{active}//return];
+	}
+	elsif (($bufarg) = ($arguments =~ m/^([^ ]+)/)) {
+		if ($bufarg =~ m/^0x/) {
+			use integer;
+			no warnings 'portable'; # I MEAN IT
+			my $w = $hdata_classes{buffer}->{from_pointer}->(hex($bufarg));
+			@buf = [$w, $w->{active}//return];
+		} else {
+			use integer;
+			my $w = get_window_from_weechat_name($bufarg);
+			@buf = [$w, $w->{active}//return];
+		}
+	}
+	else
+	{
+		@buf = grep { defined($_->[1]) } map { [$_, $_->{active}] } Irssi::windows();
+	}
+	my $m = WeechatMessage->new();
+	$m->add_string($id);
+	$m->add_type('hda');
+	$m->add_string("buffer/nicklist_item");
+	$m->add_string("group:chr,visible:chr,level:int,name:str,color:str,prefix:str,prefix_color:str");
+	my $ctpos = $m->get_length();
+	my $objct = 0;
+	$m->add_int(0);
+	for my $buf (@buf)
+	{
+		my ($w, $wi) = @$buf;
+		$wi->DOES("Irssi::Irc::Channel") or next;
+		my %nicks = map { $_->{nick} => $_ } $wi->nicks();
+		my $pfxraw = $wi->{server}->isupport("PREFIX")//"(ov)@+";
+		my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
+		length $pfx[0] == length $pfx[1] or logmsg("Imbalanced PREFIX alert!: $pfxraw");
+		my $grpct = 1;
+		# Add nicklist root
+		++$objct;
+		$m->add_ptr($w->{_irssi})->add_ptr($wi->{_irssi}); # path
+		$m->add_chr(1); # group
+		$m->add_chr(0); # visible
+		$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
+		$m->add_string("root"); # name
+		$m->add_string(undef); # color
+		$m->add_string(undef); # prefix
+		$m->add_string(undef); # prefix_color
+		for (my $pfxidx = 0; $pfxidx < length $pfx[0]; ++$pfxidx) {
+			my ($pltr, $psym) = map { substr $_, $pfxidx, 1 } @pfx;
+			++$objct;
+			$m->add_ptr($w->{_irssi})->add_ptr($wi->{_irssi} + $grpct);
+			$m->add_chr(1); # group
+			$m->add_chr(1); # visible
+			$m->add_int(1); # level
+			$m->add_string(sprintf("%03d|%s", $grpct, $pltr)); # name
+			$m->add_string("weechat.color.nicklist_group"); # color
+			$m->add_string(undef); # prefix
+			$m->add_string(undef); # prefix_color
+			$grpct++;
+			my @pfxd = sort { $a cmp $b } keys %nicks;
+			for my $n (@pfxd)
+			{
+				my $nick = $nicks{$n};
+				$nick->{prefixes} =~ m/\Q$psym\E/ or next;
+				delete $nicks{$n};
+				++$objct;
+				$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi});
+				$m->add_chr(0); # group
+				$m->add_chr(1); # visible
+				$m->add_int(0); # level
+				$m->add_string($nick->{nick}); # name
+				$m->add_string(undef); # color
+				$m->add_string($psym); # prefix
+				$m->add_string(''); # prefix_color
+			}
+		}
+		my @nopfx = sort { $a->{nick} cmp $b->{nick} } map { $nicks{$_} } keys %nicks;
+		++$objct;
+		$m->add_ptr($w->{_irssi})->add_ptr($wi->{_irssi} + $grpct);
+		$m->add_chr(1); # group
+		$m->add_chr(1); # visible
+		$m->add_int(1); # level
+		$m->add_string("999|..."); # name
+		$m->add_string("weechat.color.nicklist_group"); # color
+		$m->add_string(undef); # prefix
+		$m->add_string(undef); # prefix_color
+		for my $nick (@nopfx)
+		{
+			++$objct;
+			$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi});
+			$m->add_chr(0); # group
+			$m->add_chr(1); # visible
+			$m->add_int(0); # level
+			$m->add_string($nick->{nick}); # name
+			$m->add_string(undef); # color
+			$m->add_string(''); # prefix
+			$m->add_string(''); # prefix_color
+		}
+	}
+	$m->set_int($ctpos, $objct);
+	if (defined($client)) {
+		sendto_client($client, $m->get_buffer());
+	} else {
+		return $m;
+	}
+}
+
 sub process_message {
     my ($client, $message) = @_;
 
@@ -1138,23 +1267,64 @@ sub process_message {
         return
     }
 
-    if ($command eq 'init') {
-        parse_init($client, $id, $arguments);
-    } elsif ($command eq 'info') {
-        parse_info($client, $id, $arguments);
-    } elsif ($command eq 'hdata') {
-        logmsg("HDATA: $message");
-        parse_hdata($client, $id, $arguments);
-    } elsif ($command eq 'input') {
-        parse_input($client, $id, $arguments);
-    } elsif ($command eq 'sync') {
-        parse_sync($client, $id, $arguments);
-    } elsif ($command eq 'desync') {
-        parse_desync($client, $id, $arguments);
-    } else {
-        logmsg("Unhandled: $message");
-        logmsg("ID: $id COMMAND: $command ARGS: $arguments");
-    }
+		if ($command eq 'init') {
+			parse_init($client, $id, $arguments);
+		}
+		elsif ($command eq 'info') {
+			parse_info($client, $id, $arguments);
+		}
+		elsif ($command eq 'hdata') {
+			logmsg("HDATA: $message");
+			parse_hdata($client, $id, $arguments);
+		}
+		elsif ($command eq 'input') {
+			parse_input($client, $id, $arguments);
+		}
+		elsif ($command eq 'sync') {
+			parse_sync($client, $id, $arguments);
+		}
+		elsif ($command eq 'desync') {
+			parse_desync($client, $id, $arguments);
+		}
+		elsif ($command eq 'quit') {
+			desync_client($client);
+			$client->finish();
+			delete $clients{$client};
+		}
+		elsif ($command eq 'test') {
+			my $m = WeechatMessage->new();
+			$m->add_string($id);
+			$m->add_type('chr')->add_chr(65);
+			$m->add_type('int')->add_int(123456);
+			$m->add_type('int')->add_int(-123456);
+			$m->add_type('lon')->add_string_shortlength("1234567890");
+			$m->add_type('lon')->add_string_shortlength("1234567890");
+			$m->add_type('str')->add_string("a string");
+			$m->add_type('str')->add_string("");
+			$m->add_type('str')->add_string(undef);
+			$m->add_type('buf')->add_string("buffer");
+			$m->add_type('buf')->add_string(undef);
+			$m->add_type('ptr')->add_string_shortlength("0x1234abcd");
+			$m->add_type('ptr')->add_string_shortlength("0x0");
+			$m->add_type('tim')->add_string_shortlength("1321993456");
+			$m->add_type('arr')->add_type('str')->add_int(2)->add_string("abc")->add_string("def");
+			$m->add_type('arr')->add_type('int')->add_int(3)->add_int(123)->add_int(456)->add_int(789);
+			sendto_client($client, $m->get_buffer());
+		}
+		elsif ($command eq 'ping') {
+			my $m = WeechatMessage->new();
+			$m->add_string("_pong");
+			$m->add_type('str');
+			$m->add_string($arguments);
+			sendto_client($client, $m->get_buffer());
+		}
+		elsif ($command eq 'nicklist') {
+			parse_nicklist($client, $id, $arguments);
+		}
+		else {
+			logmsg("Unhandled: $message");
+			logmsg("ID: $id COMMAND: $command ARGS: $arguments");
+		}
 }
 
 my $wants_hilight_message = {};
