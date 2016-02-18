@@ -57,61 +57,6 @@ Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_docroot', File::Spec->catd
 my $daemon;
 my $loop_id;
 
-$ENV{MOJO_REACTOR} = "Mojo::Reactor::Irssi";
-package Mojo::Reactor::Irssi {
-	use Carp;
-	use Mojo::Base 'Mojo::Reactor';
-
-	sub again {
-	}
-	
-	sub io {
-		my ($self, $handle, $cb) = @_;
-	}
-	
-	sub is_running {
-	}
-
-	sub next_tick {
-	}
-
-	sub one_tick {
-	}
-
-	sub recurring {
-		my ($self, $time, $cb) = @_;
-		ref($cb) eq 'CODE' or Carp::croak("Not a code reference");
-		$time *= 1000;
-		my $tag = Irssi::timeout_add($time, $cb, undef);
-		return $tag;
-	}
-
-	sub remove {
-		my ($self, $tag) = @_;
-		Irssi::timeout_remove($tag);
-	}
-
-	sub reset {
-	}
-
-	sub start {
-	}
-
-	sub stop {
-	}
-
-	sub timer {
-		my ($self, $time, $cb) = @_;
-		ref($cb) eq 'CODE' or Carp::croak("Not a code reference");
-		$time *= 1000;
-		my $tag = Irssi::timeout_add_once($time, $cb, undef);
-		return $tag;
-	}
-
-	sub watch {
-	}
-}
-
 sub mojoify {
     $ENV{MOJO_REUSE} = 1;
 
@@ -1102,11 +1047,16 @@ sub parse_input
 	{
 		$buf = get_window_from_weechat_name($target);
 	}
+	my $oldw = Irssi::active_win();
 	$buf//return;
+	$buf->set_active();
 	#$buf->command($input);
 	my $s = $buf->{active_server};
 	my $wi = $buf->{active};
 	Irssi::signal_emit("send command", $input, $s, $wi);
+	if (($buf->{_irssi} == Irssi::active_win()->{_irssi}) && (grep { $_->{_irssi} == $oldw->{_irssi} } Irssi::windows())) {
+		$oldw->set_active();
+	}
 }
 
 my %subscribers;
@@ -1299,7 +1249,7 @@ sub parse_nicklist {
 		my $pfxraw = $wi->{server}->isupport("PREFIX")//"(ov)@+";
 		my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
 		length $pfx[0] == length $pfx[1] or logmsg("Imbalanced PREFIX alert!: $pfxraw");
-		my $grpct = 1;
+		my $grpct = 0;
 		# Add nicklist root
 		++$objct;
 		$m->add_ptr($w->{_irssi})->add_ptr($w->{_irssi}); # path
@@ -1341,7 +1291,7 @@ sub parse_nicklist {
 		}
 		my @nopfx = sort { $a->{nick} cmp $b->{nick} } map { $nicks{$_} } keys %nicks;
 		++$objct;
-		$m->add_ptr($w->{_irssi})->add_ptr($wi->{_irssi} + $grpct);
+		$m->add_ptr($w->{_irssi})->add_ptr($wi->{_irssi} + 999);
 		$m->add_chr(1); # group
 		$m->add_chr(1); # visible
 		$m->add_int(1); # level
@@ -1466,8 +1416,6 @@ sub gui_print_text_finished {
     my $line = $buf->{cur_line};
 
     my $ptr = sprintf("%016x", $line->{_irssi});
-    logmsg("Print line: " . $window->{_irssi});
-    logmsg("Windows now: " . (join ",", map { $_->{_irssi} } Irssi::windows()));
 
     my $m = parse_hdata(undef, "_buffer_line_added", [$buf, $line], "line_data:0xINARGS");
     dispatch_event_message($m->get_buffer(), buffer => $window->{_irssi});
@@ -1488,12 +1436,18 @@ sub configure {
 }
 =cut
 
+=todo
+# These two relate to nicklist diffs. They have to be up here so window_destroyed can remove windows with pending nicklist changes.
+# We're going to use a bit of irssi-like logic, where each change to the nicklist is held in a buffer for up to 2 seconds.
+my $nickdiff_timertag = undef;
+# Keyed by window {_irssi} value.
+# Value is a list with nickrec {_irssi} value (which we need for pointer-path) and 
+my %nickdiff_pending;
+=cut
+
 sub window_created {
     my $window = shift;
     use integer;
-
-    logmsg("Create window " . $window->{_irssi});
-    logmsg("Windows now: " . (join ",", map { $_->{_irssi} } Irssi::windows()));
 
     my $m = parse_hdata(undef, "_buffer_opened", $window, "buffer:0xINARGS number,full_name,short_name,nicklist,title,local_variables,prev_buffer,next_buffer");
 
@@ -1518,6 +1472,8 @@ sub window_destroyed {
     {
 	    delete $subscribers{$evt}->{$window->{_irssi}}; # Auto-remove all window subscriptions
     }
+
+#    delete $nickdiff_pending{$window->{_irssi}};
 
     # sendto_all_clients({
     #   event => 'delwindow',
@@ -1559,8 +1515,6 @@ sub window_refnum_changed {
 sub window_item_name_changed {
 	my ($witem) = @_;
 	my $w = $witem->window();
-    logmsg("Item change: " . $w->{_irssi});
-    logmsg("Windows now: " . (join ",", map { $_->{_irssi} } Irssi::windows()));
 
 	my $m = parse_hdata(undef, "_buffer_renamed", $w, "buffer:0xINARGS number,full_name,short_name,local_variables");
 	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
@@ -1575,6 +1529,7 @@ sub window_item_changed {
 	# First announce the window rename.
 	my $m = parse_hdata(undef, "_buffer_renamed", $window, "buffer:0xINARGS number,full_name,short_name,local_variables");
 	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+#	delete $nickdiff_pending{$window->{_irssi}};
 	$m = parse_nicklist(undef, "_nicklist", $window);
 	dispatch_event_message($m->get_buffer(), nicklist => $window->{_irssi});
 }
@@ -1584,6 +1539,200 @@ sub window_title_changed {
 	my $w = $witem->window();
 	my $m = parse_hdata(undef, "_buffer_title_changed", $w, "buffer:0xINARGS number,full_name,title");
 	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+}
+
+sub nicklist_add {
+	my ($chan, $nick) = @_;
+	my $w = $chan->window();
+	my $psym = substr($nick->{prefixes}//"", 0, 1);
+	my $pfxraw = $chan->{server}->isupport("PREFIX")//"(ov)@+";
+	my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
+	length $pfx[0] == length $pfx[1] or logmsg("Imbalanced PREFIX alert!: $pfxraw");
+	my $m = WeechatMessage->new();
+	$m->add_string("_nicklist_diff");
+	$m->add_type("hda");
+	$m->add_string("buffer/nicklist_item");
+	$m->add_string("_diff:chr,group:chr,visible:chr,level:int,name:str,color:str,prefix:str,prefix_color:str");
+	$m->add_int(2);
+	my $grpix = $psym ? index($pfx[1], $psym) : 999;
+	$m->add_ptr($w->{_irssi})->add_ptr($chan->{_irssi} + $grpix); # path
+	$m->add_chr(ord('^')); # diff code
+	$m->add_chr(1); # group
+	$m->add_chr(1); # visible
+	$m->add_int(1); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string(sprintf("%03d|%s", $grpix, ($grpix == 999 ? "..." : substr($pfx[0], $grpix, 1)))); # name
+	$m->add_string("weechat.color.nicklist_group"); # color
+	$m->add_string(undef); # prefix
+	$m->add_string(undef); # prefix_color
+	$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi}); # path
+	$m->add_chr(ord('+')); # diff code
+	$m->add_chr(0); # group
+	$m->add_chr(1); # visible
+	$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string($nick->{nick}); # name
+	$m->add_string(""); # color
+	$m->add_string($psym); # prefix
+	$m->add_string(undef); # prefix_color
+	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+}
+
+sub nicklist_remove {
+	my ($chan, $nick) = @_;
+	my $w = $chan->window();
+	my $psym = substr($nick->{prefixes}//"", 0, 1);
+	my $pfxraw = $chan->{server}->isupport("PREFIX")//"(ov)@+";
+	my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
+	length $pfx[0] == length $pfx[1] or logmsg("Imbalanced PREFIX alert!: $pfxraw");
+	my $m = WeechatMessage->new();
+	$m->add_string("_nicklist_diff");
+	$m->add_type("hda");
+	$m->add_string("buffer/nicklist_item");
+	$m->add_string("_diff:chr,group:chr,visible:chr,level:int,name:str,color:str,prefix:str,prefix_color:str");
+	$m->add_int(2);
+	my $grpix = $psym ? index($pfx[1], $psym) : 999;
+	$m->add_ptr($w->{_irssi})->add_ptr($chan->{_irssi} + $grpix); # path
+	$m->add_chr(ord('^')); # diff code
+	$m->add_chr(1); # group
+	$m->add_chr(1); # visible
+	$m->add_int(1); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string(sprintf("%03d|%s", $grpix, ($grpix == 999 ? "..." : substr($pfx[0], $grpix, 1)))); # name
+	$m->add_string("weechat.color.nicklist_group"); # color
+	$m->add_string(undef); # prefix
+	$m->add_string(undef); # prefix_color
+	$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi}); # path
+	$m->add_chr(ord('-')); # diff code
+	$m->add_chr(0); # group
+	$m->add_chr(1); # visible
+	$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string($nick->{nick}); # name
+	$m->add_string(""); # color
+	$m->add_string($psym); # prefix
+	$m->add_string(undef); # prefix_color
+	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+}
+
+sub nicklist_change {
+	my ($chan, $nick) = @_;
+	my $w = $chan->window();
+	my $psym = substr($nick->{prefixes}//"", 0, 1);
+	my $pfxraw = $chan->{server}->isupport("PREFIX")//"(ov)@+";
+	my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
+	length $pfx[0] == length $pfx[1] or logmsg("Imbalanced PREFIX alert!: $pfxraw");
+	my $m = WeechatMessage->new();
+	$m->add_string("_nicklist_diff");
+	$m->add_type("hda");
+	$m->add_string("buffer/nicklist_item");
+	$m->add_string("_diff:chr,group:chr,visible:chr,level:int,name:str,color:str,prefix:str,prefix_color:str");
+	$m->add_int(2);
+	my $grpix = $psym ? index($pfx[1], $psym) : 999;
+	$m->add_ptr($w->{_irssi})->add_ptr($chan->{_irssi} + $grpix); # path
+	$m->add_chr(ord('^')); # diff code
+	$m->add_chr(1); # group
+	$m->add_chr(1); # visible
+	$m->add_int(1); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string(sprintf("%03d|%s", $grpix, ($grpix == 999 ? "..." : substr($pfx[0], $grpix, 1)))); # name
+	$m->add_string("weechat.color.nicklist_group"); # color
+	$m->add_string(undef); # prefix
+	$m->add_string(undef); # prefix_color
+	$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi}); # path
+	$m->add_chr(ord('*')); # diff code
+	$m->add_chr(0); # group
+	$m->add_chr(1); # visible
+	$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string($nick->{nick}); # name
+	$m->add_string(""); # color
+	$m->add_string($psym); # prefix
+	$m->add_string(undef); # prefix_color
+	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+}
+
+sub nickmode_change {
+	my ($chan, $nick, $setby, $modestr, $typestr) = @_;
+	my $w = $chan->window();
+	my $pfxraw = $chan->{server}->isupport("PREFIX")//"(ov)@+";
+	my (@pfx) = ($pfxraw =~ m/^\(([[:alpha:]]+)\)(.+)$/);
+	length $pfx[0] == length $pfx[1] or logmsg("Imbalanced PREFIX alert!: $pfxraw");
+	# Irssi will have already updated the ->{prefixes} value so we have no way to verify we aren't processing a duplicate change.
+	# If the highest prefix is higher than the one corresponding to the changed mode, then nothing needs to be done:
+	my $m = WeechatMessage->new();
+	$m->add_string("_nicklist_diff");
+	$m->add_type("hda");
+	$m->add_string("buffer/nicklist_item");
+	$m->add_string("_diff:chr,group:chr,visible:chr,level:int,name:str,color:str,prefix:str,prefix_color:str");
+	$m->add_int(4);
+
+	my $toppfx = $nick->{prefixes} ? substr($nick->{prefixes}//"", 0, 1) : undef;
+	my $topidx = defined($toppfx) ? index($pfx[1], $toppfx) : undef;
+	my $topmode = defined($topidx) ? substr($pfx[0], $topidx, 1) : undef;
+	my $nextpfx = length($nick->{prefixes}) > 1 ? substr($nick->{prefixes}, 1, 1) : undef; # Space so perl doesn't warn of substr'ing too far
+	my $nextidx = defined($nextpfx) ? index($pfx[1], $nextpfx) : undef;
+	my $nextmode = defined($nextidx) ? substr($pfx[0], $nextidx, 1) : undef;
+	my $chgpfx = $modestr;
+	my $chgidx = index($pfx[1], $chgpfx);
+	my $chgmode = substr($pfx[0], $chgidx, 1);
+
+	my (@remove, @addto);
+
+	if ($typestr eq '+') {
+		$chgpfx eq ($toppfx//"") or return; # If the top prefix isn't what we just added, nothing needs to be done.
+		if (!defined($nextpfx)) {
+			@remove = (999, "...", "");
+		} else {
+			@remove = ($nextidx, $nextmode, $nextpfx);
+		}
+		@addto = ($topidx, $topmode, $toppfx);
+	} else {
+		@remove = ($chgidx, $chgmode, $chgpfx);
+		if (!defined($topidx)) {
+			@addto = (999, "...", "");
+		} else {
+			$chgidx < $topidx or return; # If removed prefix is not higher than the top-most prefix, nothing needs to be done.
+			@addto = ($topidx, $topmode, $toppfx);
+		}
+	}
+
+	my ($remove_idx, $remove_mode, $remove_pfx) = @remove;
+	my ($add_idx, $add_mode, $add_pfx) = @addto;
+
+	$m->add_ptr($w->{_irssi})->add_ptr($chan->{_irssi} + $remove_idx); # path
+	$m->add_chr(ord('^')); # diff code
+	$m->add_chr(1); # group
+	$m->add_chr(1); # visible
+	$m->add_int(1); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string(sprintf("%03d|%s", $remove_idx, $remove_mode)); # group name
+	$m->add_string("weechat.color.nicklist_group"); # color
+	$m->add_string(undef); # prefix
+	$m->add_string(undef); # prefix_color
+	$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi}); # path
+	$m->add_chr(ord('-')); # diff code
+	$m->add_chr(0); # group
+	$m->add_chr(1); # visible
+	$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string($nick->{nick}); # name
+	$m->add_string(""); # color
+	$m->add_string($remove_pfx); # prefix
+	$m->add_string(undef); # prefix_color
+	# Remove from the lesser prefix
+	my $chgpidx = index($pfx[0], $modestr);
+	$m->add_ptr($w->{_irssi})->add_ptr($chan->{_irssi} + $add_idx); # path
+	$m->add_chr(ord('^')); # diff code
+	$m->add_chr(1); # group
+	$m->add_chr(1); # visible
+	$m->add_int(1); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string(sprintf("%03d|%s", $add_idx, $add_mode)); # group name
+	$m->add_string("weechat.color.nicklist_group"); # color
+	$m->add_string(undef); # prefix
+	$m->add_string(undef); # prefix_color
+	$m->add_ptr($w->{_irssi})->add_ptr($nick->{_irssi}); # path
+	$m->add_chr(ord('+')); # diff code
+	$m->add_chr(0); # group
+	$m->add_chr(1); # visible
+	$m->add_int(0); # level (0 for root and all nicks, 1 for all other groups)
+	$m->add_string($nick->{nick}); # name
+	$m->add_string(""); # color
+	$m->add_string($add_pfx); # Prefix
+	$m->add_string(undef); # prefix_color
+	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
 }
 
 Irssi::signal_add("gui print text finished" => \&gui_print_text_finished);
@@ -1597,6 +1746,10 @@ Irssi::signal_add_last("window item name changed" => \&window_item_name_changed)
 Irssi::signal_add_last("query address changed" => \&window_title_changed);
 Irssi::signal_add_last("channel topic changed" => \&channel_topic_changed);
 Irssi::signal_add_last("window item changed" => \&window_item_changed);
+Irssi::signal_add_last("nicklist new" => \&nicklist_add);
+Irssi::signal_add_last("nicklist remove" => \&nicklist_remove);
+Irssi::signal_add_last("nicklist chnaged" => \&nicklist_change);
+Irssi::signal_add_last("nick mode changed" => \&nickmode_change);
 
 Irssi::signal_add("setup changed", \&setup_changed);
 
