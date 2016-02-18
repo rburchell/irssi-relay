@@ -57,6 +57,61 @@ Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_docroot', File::Spec->catd
 my $daemon;
 my $loop_id;
 
+$ENV{MOJO_REACTOR} = "Mojo::Reactor::Irssi";
+package Mojo::Reactor::Irssi {
+	use Carp;
+	use Mojo::Base 'Mojo::Reactor';
+
+	sub again {
+	}
+	
+	sub io {
+		my ($self, $handle, $cb) = @_;
+	}
+	
+	sub is_running {
+	}
+
+	sub next_tick {
+	}
+
+	sub one_tick {
+	}
+
+	sub recurring {
+		my ($self, $time, $cb) = @_;
+		ref($cb) eq 'CODE' or Carp::croak("Not a code reference");
+		$time *= 1000;
+		my $tag = Irssi::timeout_add($time, $cb, undef);
+		return $tag;
+	}
+
+	sub remove {
+		my ($self, $tag) = @_;
+		Irssi::timeout_remove($tag);
+	}
+
+	sub reset {
+	}
+
+	sub start {
+	}
+
+	sub stop {
+	}
+
+	sub timer {
+		my ($self, $time, $cb) = @_;
+		ref($cb) eq 'CODE' or Carp::croak("Not a code reference");
+		$time *= 1000;
+		my $tag = Irssi::timeout_add_once($time, $cb, undef);
+		return $tag;
+	}
+
+	sub watch {
+	}
+}
+
 sub mojoify {
     $ENV{MOJO_REUSE} = 1;
 
@@ -873,7 +928,7 @@ sub parse_hdata {
 	if (scalar(@arguments) > 0)
 	{
 		logmsg("Got a internal HDATA for $path from objects of $hclass with keys @keys");
-		@objs = map { $cls->{get_pointer}->($_) => $_ } @arguments;
+		@objs = map { sprintf("%016x", $cls->{get_pointer}->($_)) => $_ } @arguments;
 	}
 	elsif ($objstr =~ m/^0x/)
 	{
@@ -1194,7 +1249,7 @@ sub parse_nicklist {
 	my @buf;
 	my $bufarg;
 	logmsg("Got NICKLIST ($id) for $arguments");
-	if (ref($arguments) && $arguments->DOES("Irssi::Window"))
+	if (ref($arguments) && $arguments->DOES("Irssi::UI::Window"))
 	{
 		$arguments->{_irssi} or do { Carp::cluck("Why is this undefined?"); };
 		@buf = [$arguments, $arguments->{active}];
@@ -1232,7 +1287,7 @@ sub parse_nicklist {
 			# if they switch to a query we should push an empty nicklist.
 			++$objct;
 			my $ptr = $w->{_irssi};
-			$ptr//do{Carp::carp("Why is this undefined?"); next;};
+			$ptr//do{Carp::cluck("Why is this undefined?"); next;};
 			$m->add_ptr($w->{_irssi})->add_ptr($w->{_irssi}); # path
 			$m->add_chr(1); # group
 			$m->add_chr(0); # visible
@@ -1411,6 +1466,8 @@ sub gui_print_text_finished {
     my $line = $buf->{cur_line};
 
     my $ptr = sprintf("%016x", $line->{_irssi});
+    logmsg("Print line: " . $window->{_irssi});
+    logmsg("Windows now: " . (join ",", map { $_->{_irssi} } Irssi::windows()));
 
     my $m = parse_hdata(undef, "_buffer_line_added", [$buf, $line], "line_data:0xINARGS");
     dispatch_event_message($m->get_buffer(), buffer => $window->{_irssi});
@@ -1434,6 +1491,9 @@ sub configure {
 sub window_created {
     my $window = shift;
     use integer;
+
+    logmsg("Create window " . $window->{_irssi});
+    logmsg("Windows now: " . (join ",", map { $_->{_irssi} } Irssi::windows()));
 
     my $m = parse_hdata(undef, "_buffer_opened", $window, "buffer:0xINARGS number,full_name,short_name,nicklist,title,local_variables,prev_buffer,next_buffer");
 
@@ -1499,6 +1559,9 @@ sub window_refnum_changed {
 sub window_item_name_changed {
 	my ($witem) = @_;
 	my $w = $witem->window();
+    logmsg("Item change: " . $w->{_irssi});
+    logmsg("Windows now: " . (join ",", map { $_->{_irssi} } Irssi::windows()));
+
 	my $m = parse_hdata(undef, "_buffer_renamed", $w, "buffer:0xINARGS number,full_name,short_name,local_variables");
 	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
 	if ($w->DOES("Irssi::Irc::Query")) {
