@@ -85,7 +85,7 @@ sub mojoify {
     }
 
     logmsg("listen on $listen_url");
-    $daemon = Mojo::Server::Daemon->new(app => app, listen => [$listen_url])->start;
+    $daemon = Mojo::Server::Daemon->new(app => app, listen => [$listen_url], inactivity_timeout => 0)->start;
 
     #TODO XXX FIXME we may be able to up this to 1000 or higher if abuse
     # mojo ->{handle} into the input_add system
