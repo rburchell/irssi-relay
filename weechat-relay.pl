@@ -109,6 +109,20 @@ my $daemon;
 my $loop_id;
 
 my %settings;
+my %clients = ();
+sub ws_loop;
+
+sub demojoify {
+	Irssi::timeout_remove($loop_id);
+	# TODO: is daemon cleared up properly? and finish this
+	$daemon->stop();
+	my @c = values %clients;
+	$_->{client}->finish() for @c;
+	# Block until all ->finish calls complete.
+	while (scalar keys %clients) {
+		ws_loop;
+	}
+}
 
 sub mojoify {
     $ENV{MOJO_REUSE} = 1;
@@ -150,8 +164,6 @@ sub mojoify {
 
 mojoify();
 
-my %clients = ();
-
 sub setup_changed {
     my ($cert, $key);
     $cert = Irssi::settings_get_str('ipw_cert');
@@ -175,11 +187,7 @@ sub setup_changed {
 	$settings{docroot} ne Irssi::settings_get_str('ipw_docroot')) {
 	
 	# Stop the server and reinitialize it.
-	Irssi::timeout_remove($loop_id);
-	# TODO: is daemon cleared up properly? and finish this
-	$daemon->stop();
-	my @c = values %clients;
-	$_->{client}->finish() for @c;
+	demojoify();
 	# Now restart it.
 	mojoify();
    }
@@ -193,9 +201,9 @@ sub setup_changed {
 
 sub ws_loop {
     if($daemon) {
-        my $id = Mojo::IOLoop->timer(0.0 => sub {});
-        Mojo::IOLoop->one_tick;
-        Mojo::IOLoop->remove($id);
+        my $id = $daemon->ioloop->timer(0.0 => sub {});
+        $daemon->ioloop->one_tick;
+        $daemon->ioloop->remove($id);
     }
 }
 
@@ -1858,12 +1866,8 @@ Irssi::signal_add_last("nick mode changed" => \&nickmode_change);
 Irssi::signal_add("setup changed", \&setup_changed);
 
 sub UNLOAD {
-    Irssi::timeout_remove($loop_id);
-    # TODO: is daemon cleared up properly? and finish this
-    $daemon->stop();
-    my @c = values %clients;
-    $_->{client}->finish() for @c;
-    # Symbol::delete_package("WeechatMessage");
+	demojoify();
+	Symbol::delete_package("WeechatMessage");
 }
 
 
