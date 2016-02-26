@@ -470,7 +470,7 @@ my %hdata_classes = (
 		type_key_title => 'str',
 		key_title => sub { my ($w, $m) = @_; my ($wi) = $w->items(); if (defined($wi)) { $m->add_string($wi->parse_special('$topic')); } else { $m->add_string(Irssi::parse_special('Irssi v$J - http://www.irssi.org')); } },
 		type_key_time_for_each_line => 'int',
-		key_time_for_each_lilne => sub { my ($w, $m) = @_; $m->add_int(Irssi::settings_get_bool("timestamps")); },
+		key_time_for_each_line => sub { my ($w, $m) = @_; $m->add_int(Irssi::settings_get_bool("timestamps")); },
 		type_key_chat_refresh_needed => 'int',
 		key_chat_refresh_needed => sub { my ($w, $m) = @_; $m->add_int(0); }, # Not sure what to do here
 		type_key_nicklist => 'int',
@@ -637,6 +637,7 @@ my %hdata_classes = (
 		sublist_last_line => sub {
 			my ($buf, $ct) = @_;
 			my $l = $buf->{cur_line};
+			$l//return ;
 			my @l = ([$buf, $l]);
 			if ($ct eq '*')
 			{
@@ -1744,7 +1745,7 @@ Irssi::signal_add_first("window hilight" => \&window_hilight);
 Irssi::signal_add("window refnum changed" => \&window_refnum_changed);
 Irssi::signal_add_last("window item name changed" => \&window_item_name_changed);
 Irssi::signal_add_last("query address changed" => \&window_title_changed);
-Irssi::signal_add_last("channel topic changed" => \&channel_topic_changed);
+Irssi::signal_add_last("channel topic changed" => \&window_title_changed);
 Irssi::signal_add_last("window item changed" => \&window_item_changed);
 Irssi::signal_add_last("nicklist new" => \&nicklist_add);
 Irssi::signal_add_last("nicklist remove" => \&nicklist_remove);
