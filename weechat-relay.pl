@@ -424,7 +424,7 @@ my %hdata_classes = (
 			# A weechat "buffer" is what irssi calls a window, but weechat also merges in stuff from window item.
 			# Solution: we return the window and the info of the active item (if there is one)
 			# And we will have to push things like nicklist changes if they do /window item next
-			my @w = Irssi::windows();
+			my @w = sort { $a->{refnum} <=> $b->{refnum} } Irssi::windows();
 			if ($ct eq '*' || $ct > $#w) { return @w; }
 			elsif ($ct <= 0) { return $w[0]; }
 			else { return $w[0 .. $ct]; }
@@ -636,9 +636,23 @@ my %hdata_classes = (
 		type_key_local_variables => 'htb',
 		key_local_variables => sub {
 			my ($w, $m) = @_;
+			my $wi = $w->{active};
+			my %locals = (
+				plugin => 'irc'
+			);
+			if (defined $wi) {
+				$locals{server} = $wi->{server}->{address};
+				if ($wi->DOES("Irssi::Irc::Channel")) { $locals{type} = "channel"; }
+				elsif ($wi->DOES("Irssi::Irc::Query")) { $locals{type} = "private"; }
+			}
 			$m->add_type("str");
 			$m->add_type("str");
-			$m->add_int(0);
+			$m->add_int(scalar keys %locals);
+			for my $k (keys %locals) {
+				my $v = $locals{$k};
+				$m->add_string($k);
+				$m->add_string($v);
+			}
 		},
 	},
 	# TODO TODO TODO What the heck is hotlist? For now returning empties.
