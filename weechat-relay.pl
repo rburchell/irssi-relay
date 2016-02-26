@@ -1509,10 +1509,10 @@ my $wants_hilight_message = {};
 
 our $_ugh = 0;
 sub gui_print_text_finished {
-	local $SIG{__WARN__} = \&logmsg;
 	$_ugh and return;
 	local $_ugh = 1;
 	eval {
+	local $SIG{__WARN__} = \&logmsg;
     my ($window) = @_;
     my $ref = $window->{'refnum'}; 
     my $buf = $window->view()->{buffer};
