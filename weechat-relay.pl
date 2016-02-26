@@ -895,7 +895,9 @@ my %hdata_classes = (
 		key_message => sub {
 			my ($bl, $m) = @_;
 			my ($buf, $l) = @$bl;
-		       	$m->add_string($l->get_text(0));
+			my $txt = $l->get_text(0);
+			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
+		       	$m->add_string($txt);
 		},
 	},
 );
