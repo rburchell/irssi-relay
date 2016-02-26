@@ -185,7 +185,7 @@ sub setup_changed {
    }
 
     # Did the regex setting change?
-    if ($tsrxval ne IrssI::settings_get_str('ipw_strip_prefix'))
+    if ($tsrxval ne Irssi::settings_get_str('ipw_strip_prefix'))
     {
 	    _load_regex();
     }
