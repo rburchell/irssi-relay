@@ -54,8 +54,61 @@ Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_key', '');
 Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_password', '');
 Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_docroot', File::Spec->catdir(dirname(__FILE__), 'client'));
 
+my $tsfmt = Irssi::settings_get_str("timestamp_format");
+my $tsrxval;
+
+sub _rxify {
+	my ($mrk, $txt) = @_;
+	$mrk eq 'TEXT' and return '\w+';
+	$mrk eq 'NUM' and return '\d+';
+	$mrk eq 'NUMSPC' and return '[\d ]+';
+	$mrk eq 'PERCENT' and return '\%';
+	$mrk eq 'NOTSPEC' and return quotemeta($txt);
+	$mrk eq 'WEIRD' and return '';
+	if ($mrk eq 'COMPOSITE') {
+		for (substr($txt, -1, 1)) { # Puts the last character into $_
+			/D/ and return '\d+\/\d+\/\d+';
+			/F/ and return '\d+\-\d+\-\d+';
+			/n/ and return '\n';
+			/t/ and return '\t';
+			/z/ and return '[+-]\d+';
+		}
+	}
+}
+
+our $REGMARK;
+$tsrxval = $tsfmt =~ s/(%[aAbBhpPZ](*MARK:TEXT)|%(?:[CdGgHIjmMsSuUVwWyY]|E[CyY]|O[dHImMSuUVwWy])(*MARK:NUM)|%O?[ekl](*MARK:NUMSPC)|%%(*MARK:PERCENT)|%(DFntz)(*MARK:COMPOSITE)|%(?:E?[cxX+]|rRT)(*MARK:WEIRD)|(*MARK:NOTSPEC).)/
+	_rxify($REGMARK, $1);
+/ger; # g = replace-all, e = replacement is actually code, r = leave $tsfmt unchanged, return result to put in $tsrx
+
+# Now add the regex settings
+Irssi::settings_add_str(irssi_proxy_websocket => 'ipw_strip_prefix', $tsrxval);
+
+my $tsrx;
+
+sub _load_regex {
+	$tsrx = undef;
+	# Now GET the actual regex string currently set (since irssi may have loaded some other value from config)
+	$tsrxval = Irssi::settings_get_str('ipw_strip_prefix');
+
+	# Now compile it:
+	eval {
+		if ($tsrxval ne '') {
+			$tsrx = qr/^$tsrxval/;
+		}
+	};
+	if ($@) {
+		my $msg = ($@ =~ s/ at .* line \d+//r);
+		Irssi::print("Your ipw_strip_prefix setting has errors: $msg");
+		Irssi::print("Line prefixes will not be stripped until this is corrected.");
+	}
+}
+_load_regex();
+
 my $daemon;
 my $loop_id;
+
+my %settings;
 
 sub mojoify {
     $ENV{MOJO_REUSE} = 1;
@@ -78,6 +131,8 @@ sub mojoify {
     my $cert = Irssi::settings_get_str('ipw_cert');
     my $key  = Irssi::settings_get_str('ipw_key');
 
+    %settings = (host => $host, port => $port, cert => $cert, key => $key, ssl => Irssi::settings_get_bool('ipw_ssl'), docroot => Irssi::settings_get_str('ipw_docroot'));
+
     if(Irssi::settings_get_bool('ipw_ssl') && -e $cert && -e $key) {
         $listen_url = sprintf("https://%s:%d:%s:%s", $host, $port, $cert, $key);
     } else {
@@ -90,9 +145,12 @@ sub mojoify {
     #TODO XXX FIXME we may be able to up this to 1000 or higher if abuse
     # mojo ->{handle} into the input_add system
     $loop_id = Irssi::timeout_add(100, \&ws_loop, 0);
+
 }
 
 mojoify();
+
+my %clients = ();
 
 sub setup_changed {
     my ($cert, $key);
@@ -106,9 +164,31 @@ sub setup_changed {
         logmsg("Key file doesn't exist: $key");
     }
 
-    # TODO XXX FIXME
-    # we should probably check that it was us that changed
-    mojoify();
+    # If any connection settings changed, stop and restart the mojo server. NOTE: this means we also disconnect all relays!
+    # NOTE: password changes do NOT force a stop/restart
+    if (
+        $settings{host} ne Irssi::settings_get_str('ipw_host') ||
+        $settings{port} != Irssi::settings_get_int('ipw_port') ||
+	$settings{cert} ne Irssi::settings_get_str('ipw_cert') ||
+	$settings{key}  ne Irssi::settings_get_str('ipw_key')  ||
+	$settings{ssl}  != Irssi::settings_get_bool('ipw_ssl') ||
+	$settings{docroot} ne Irssi::settings_get_str('ipw_docroot')) {
+	
+	# Stop the server and reinitialize it.
+	Irssi::timeout_remove($loop_id);
+	# TODO: is daemon cleared up properly? and finish this
+	$daemon->stop();
+	my @c = values %clients;
+	$_->finish() for @c;
+	# Now restart it.
+	mojoify();
+   }
+
+    # Did the regex setting change?
+    if ($tsrxval ne IrssI::settings_get_str('ipw_strip_prefix'))
+    {
+	    _load_regex();
+    }
 };
 
 sub ws_loop {
@@ -121,8 +201,6 @@ sub ws_loop {
 
 my $json = JSON->new->allow_nonref;
 $json->allow_blessed(1);
-
-my %clients = ();
 
 sub logmsg {
     my $msg = shift;
