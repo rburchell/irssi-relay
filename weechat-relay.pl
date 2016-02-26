@@ -179,7 +179,7 @@ sub setup_changed {
 	# TODO: is daemon cleared up properly? and finish this
 	$daemon->stop();
 	my @c = values %clients;
-	$_->finish() for @c;
+	$_->{client}->finish() for @c;
 	# Now restart it.
 	mojoify();
    }
@@ -217,6 +217,7 @@ websocket '/weechat' => sub {
         client => $client,
         color => 0,
         authenticated => 0,
+	compression => 'off',
     };
     $client->on(message => \&process_message);
     $client->on(finish => sub {
@@ -241,6 +242,7 @@ sub sendto_client {
     }
 }
 
+=thisisntused
 sub sendto_all_clients {
     my $msg = shift;
 
@@ -248,23 +250,24 @@ sub sendto_all_clients {
         sendto_client($chash->{'client'}, $msg);
     }
 }
+=cut
 
 sub parse_init {
     my ($client, $id, $arguments) = @_;
     my @kvpairs = split(',', $arguments);
+    my $chash = $clients{$client};
     foreach my $kvpair (@kvpairs) {
         my ($key, $value) = split('=', $kvpair);
 
         if ($key eq 'compression') {
-            # ignore, we aren't going to support this
+	    $chash->{compression} = $value;
         } elsif ($key eq 'password') {
-            my $chash = $clients{$client};
-
             # TODO
-            #if ($value eq Irssi::settings_get_str('ipw_password')) {
-            $chash->{'authenticated'} = 1;
-            logmsg("Client has successfully authenticated");
-            #}
+	    my $tpass = Irssi::settings_get_str('ipw_password');
+            if ($value eq $tpass) {
+	            $chash->{'authenticated'} = 1;
+	            logmsg("Client has successfully authenticated");
+            }
         } else {
             logmsg("Client sent unknown init key: $key = $value")
         }
@@ -1426,6 +1429,11 @@ sub process_message {
 		if ($command eq 'init') {
 			parse_init($client, $id, $arguments);
 		}
+
+		# Drop the client if they don't send INIT first, or their INIT password was bad.
+		if (!$clients{$client}->{authenticated}) {
+			$client->finish();
+		}
 		elsif ($command eq 'info') {
 			parse_info($client, $id, $arguments);
 		}
@@ -1840,7 +1848,7 @@ sub UNLOAD {
     # TODO: is daemon cleared up properly? and finish this
     $daemon->stop();
     my @c = values %clients;
-    $_->finish() for @c;
+    $_->{client}->finish() for @c;
     # Symbol::delete_package("WeechatMessage");
 }
 
