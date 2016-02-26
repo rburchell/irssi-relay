@@ -1657,6 +1657,7 @@ sub nicklist_add {
 
 sub nicklist_remove {
 	my ($chan, $nick) = @_;
+	$chan->{left} and return; # nicklist removes fire off during channel teardown - skip them
 	my $w = $chan->window();
 	my $psym = substr($nick->{prefixes}//"", 0, 1);
 	my $pfxraw = $chan->{server}->isupport("PREFIX")//"(ov)@+";
