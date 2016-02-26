@@ -1633,8 +1633,6 @@ sub window_item_name_changed {
 		$m = parse_hdata(undef, "_buffer_title_changed", $w, "buffer:0xINARGS number,full_name,title");
 		dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
 	}
-	$m = parse_hdata(undef, "_buffer_localvar_changed", $w, "buffer:0xINARGS number,full_name,local_variables");
-	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
 }
 
 sub window_item_changed {
@@ -1645,6 +1643,8 @@ sub window_item_changed {
 #	delete $nickdiff_pending{$window->{_irssi}};
 	$m = parse_nicklist(undef, "_nicklist", $window);
 	dispatch_event_message($m->get_buffer(), nicklist => $window->{_irssi});
+	$m = parse_hdata(undef, "_buffer_localvar_changed", $w, "buffer:0xINARGS number,full_name,local_variables");
+	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
 }
 
 sub window_title_changed {
