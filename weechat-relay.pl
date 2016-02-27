@@ -21,7 +21,7 @@ use File::Spec;
 
 use Carp ();
 
-my $have_compression = 0;
+my $have_compression;
 BEGIN {
 	eval {
 		require Compress::Zlib;
@@ -51,6 +51,10 @@ Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_cert', '');
 Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_key', '');
 Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_password', '');
 Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_docroot', File::Spec->catdir(dirname(__FILE__), 'client'));
+if ($have_compression) {
+	Irssi::settings_add_bool('irssi_proxy_websocket', 'ipw_compress', 0);
+	Irssi::settings_add_int('irssi_proxy_websocket', 'ipw_ziplevel', Compress::Zlib::Z_DEFAULT_COMPRESSION);
+}
 
 my $tsfmt = Irssi::settings_get_str("timestamp_format");
 my $tsrxval;
@@ -277,6 +281,13 @@ sub parse_init {
     }
 }
 
+sub should_compress {
+	my ($client) = @_;
+	$have_compression or return "";
+	Irssi::settings_get_bool('ipw_compress') or return "";
+	return $clients{$client}->{compression} ne 'off';
+}
+
 package WeechatMessage {
     sub new {
         my $self = bless {};
@@ -367,6 +378,33 @@ package WeechatMessage {
         return $retbuf;
     }
 
+    sub get_zipped_buffer {
+	    my ($self) = @_;
+	    my $retval = "\1";
+	    $have_compression or Carp::croak("Compression not available, caller didn't check should_compress?");
+=thisdoesntwork
+	    my ($d, $sts) = Compress::Zlib::deflateInit(-Level => Irssi::settings_get_int('ipw_ziplevel'));
+	    $d//die "Failed to create compression buffer: error $sts";
+	    my $out;
+	    ($out, $sts) = $d->deflate($self->{buf});
+	    if ($sts != Compress::Zlib::Z_OK) {
+		    die "Failed to deflate the buffer stream";
+	    }
+	    $retval .= $out;
+	    ($out, $sts) = $d->flush();
+	    if ($sts != Compress::Zlib::Z_OK) {
+		    die "Failed to flush the deflation stream";
+	    }
+	    $retval .= $out;
+=cut
+	    $retval .= Compress::Zlib::compress($self->{buf}, Irssi::settings_get_int('ipw_ziplevel'));
+	    my $retbuf = pack("N", 4+length($retval)) . $retval;
+	local $Data::Dumper::Terse = 1;
+	local $Data::Dumper::Useqq = 1;
+	$logmsg->("Zlib-compressed buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']));
+	return $retbuf;
+    }
+
     sub get_raw_buffer {
 	    my ($self) = @_;
 	    return $self->{buf};
@@ -385,7 +423,7 @@ sub parse_info {
         $obj->add_string($id);
         $obj->add_type("inf");
         $obj->add_info("version", "Irssi 1.0");
-        sendto_client($client, $obj->get_buffer());
+        sendto_client($client, (should_compress($client) ? $obj->get_zipped_buffer() : $obj->get_buffer()));
     } else {
         logmsg("Unknown INFO requested: $arguments");
     }
@@ -1093,7 +1131,7 @@ sub parse_hdata {
 
 	if (defined($client))
 	{
-		sendto_client($client, $m->get_buffer());
+		sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
 		return;
 	}
 	else
@@ -1117,6 +1155,10 @@ sub get_window_from_weechat_name
 			}
 		}
 		if ($name eq 'irc.' . $w->{name})
+		{
+			return $w;
+		}
+		if ($name eq 'noname.nameless-' . $w->{refnum})
 		{
 			return $w;
 		}
@@ -1248,7 +1290,10 @@ sub parse_desync {
 
 sub dispatch_event_message
 {
-	my ($data, @targets) = @_;
+	my ($msg, @targets) = @_;
+
+	my $data = $msg->get_buffer();
+	my $zdata = $msg->get_zipped_buffer();
 
 	my %clients = ();
 
@@ -1279,7 +1324,7 @@ sub dispatch_event_message
 	for my $k (keys %clients)
 	{
 		my $cli = $clients{$k};
-		sendto_client($cli, $data);
+		sendto_client($cli, (should_compress($cli) ? $zdata : $data));
 	}
 }
 
@@ -1415,7 +1460,7 @@ sub parse_nicklist {
 	}
 	$m->set_int($ctpos, $objct);
 	if (defined($client)) {
-		sendto_client($client, $m->get_buffer());
+		sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
 	} else {
 		return $m;
 	}
@@ -1445,6 +1490,7 @@ sub process_message {
 
 		if ($command eq 'init') {
 			parse_init($client, $id, $arguments);
+			return;
 		}
 
 		# Drop the client if they don't send INIT first, or their INIT password was bad.
@@ -1490,14 +1536,14 @@ sub process_message {
 			$m->add_type('tim')->add_string_shortlength("1321993456");
 			$m->add_type('arr')->add_type('str')->add_int(2)->add_string("abc")->add_string("def");
 			$m->add_type('arr')->add_type('int')->add_int(3)->add_int(123)->add_int(456)->add_int(789);
-			sendto_client($client, $m->get_buffer());
+			sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
 		}
 		elsif ($command eq 'ping') {
 			my $m = WeechatMessage->new();
 			$m->add_string("_pong");
 			$m->add_type('str');
 			$m->add_string($arguments);
-			sendto_client($client, $m->get_buffer());
+			sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
 		}
 		elsif ($command eq 'nicklist') {
 			parse_nicklist($client, $id, $arguments);
@@ -1524,7 +1570,7 @@ sub gui_print_text_finished {
     my $ptr = sprintf("%016x", $line->{_irssi});
 
     my $m = parse_hdata(undef, "_buffer_line_added", [$buf, $line], "line_data:0xINARGS");
-    dispatch_event_message($m->get_buffer(), buffer => $window->{_irssi});
+    dispatch_event_message($m, buffer => $window->{_irssi});
     };
     if ($@) { logmsg("ERROR IN PRINT TEXT HANDLER !!! !!! !!! $@"); }
 }
@@ -1557,7 +1603,7 @@ sub window_created {
 
     my $m = parse_hdata(undef, "_buffer_opened", $window, "buffer:0xINARGS number,full_name,short_name,nicklist,title,local_variables,prev_buffer,next_buffer");
 
-    dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+    dispatch_event_message($m, buffers => '*', buffer => $window->{_irssi});
 
     #sendto_all_clients({
     #  event => 'addwindow',
@@ -1572,7 +1618,7 @@ sub window_destroyed {
 
     my $m = parse_hdata(undef, "_buffer_closing", $window, "buffer:0xINARGS number,full_name");
 
-    dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+    dispatch_event_message($m, buffers => '*', buffer => $window->{_irssi});
 
     for my $evt (keys %subscribers)
     {
@@ -1609,7 +1655,7 @@ sub window_refnum_changed {
     my ($window, $oldnum) = @_;
 
     my $m = parse_hdata(undef, "_buffer_moved", $window, "buffer:0xINARGS number,full_name,prev_buffer,next_buffer");
-    dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+    dispatch_event_message($m, buffers => '*', buffer => $window->{_irssi});
 
     #sendto_all_clients({
     #  event => 'renumber',
@@ -1623,10 +1669,10 @@ sub window_item_name_changed {
 	my $w = $witem->window();
 
 	my $m = parse_hdata(undef, "_buffer_renamed", $w, "buffer:0xINARGS number,full_name,short_name,local_variables");
-	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+	dispatch_event_message($m, buffers => '*', buffer => $w->{_irssi});
 	if ($w->DOES("Irssi::Irc::Query")) {
 		$m = parse_hdata(undef, "_buffer_title_changed", $w, "buffer:0xINARGS number,full_name,title");
-		dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+		dispatch_event_message($m, buffers => '*', buffer => $w->{_irssi});
 	}
 }
 
@@ -1634,19 +1680,19 @@ sub window_item_changed {
 	my ($window, $witem) = @_;
 	# First announce the window rename.
 	my $m = parse_hdata(undef, "_buffer_renamed", $window, "buffer:0xINARGS number,full_name,short_name,local_variables");
-	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+	dispatch_event_message($m, buffers => '*', buffer => $window->{_irssi});
 #	delete $nickdiff_pending{$window->{_irssi}};
 	$m = parse_nicklist(undef, "_nicklist", $window);
-	dispatch_event_message($m->get_buffer(), nicklist => $window->{_irssi});
+	dispatch_event_message($m, nicklist => $window->{_irssi});
 	$m = parse_hdata(undef, "_buffer_localvar_changed", $window, "buffer:0xINARGS number,full_name,local_variables");
-	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $window->{_irssi});
+	dispatch_event_message($m, buffers => '*', buffer => $window->{_irssi});
 }
 
 sub window_title_changed {
 	my ($witem) = @_;
 	my $w = $witem->window();
 	my $m = parse_hdata(undef, "_buffer_title_changed", $w, "buffer:0xINARGS number,full_name,title");
-	dispatch_event_message($m->get_buffer(), buffers => '*', buffer => $w->{_irssi});
+	dispatch_event_message($m, buffers => '*', buffer => $w->{_irssi});
 }
 
 sub nicklist_add {
@@ -1681,7 +1727,7 @@ sub nicklist_add {
 	$m->add_string(""); # color
 	$m->add_string($psym); # prefix
 	$m->add_string(undef); # prefix_color
-	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+	dispatch_event_message($m, nicklist => $w->{_irssi});
 }
 
 sub nicklist_remove {
@@ -1718,7 +1764,7 @@ sub nicklist_remove {
 	$m->add_string(""); # color
 	$m->add_string($psym); # prefix
 	$m->add_string(undef); # prefix_color
-	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+	dispatch_event_message($m, nicklist => $w->{_irssi});
 }
 
 sub nicklist_change {
@@ -1753,7 +1799,7 @@ sub nicklist_change {
 	$m->add_string(""); # color
 	$m->add_string($psym); # prefix
 	$m->add_string(undef); # prefix_color
-	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+	dispatch_event_message($m, nicklist => $w->{_irssi});
 }
 
 sub nickmode_change {
@@ -1842,7 +1888,7 @@ sub nickmode_change {
 	$m->add_string(""); # color
 	$m->add_string($add_pfx); # Prefix
 	$m->add_string(undef); # prefix_color
-	dispatch_event_message($m->get_buffer(), nicklist => $w->{_irssi});
+	dispatch_event_message($m, nicklist => $w->{_irssi});
 }
 
 Irssi::signal_add("gui print text finished" => \&gui_print_text_finished);
