@@ -382,21 +382,6 @@ package WeechatMessage {
 	    my ($self) = @_;
 	    my $retval = "\1";
 	    $have_compression or Carp::croak("Compression not available, caller didn't check should_compress?");
-=thisdoesntwork
-	    my ($d, $sts) = Compress::Zlib::deflateInit(-Level => Irssi::settings_get_int('ipw_ziplevel'));
-	    $d//die "Failed to create compression buffer: error $sts";
-	    my $out;
-	    ($out, $sts) = $d->deflate($self->{buf});
-	    if ($sts != Compress::Zlib::Z_OK) {
-		    die "Failed to deflate the buffer stream";
-	    }
-	    $retval .= $out;
-	    ($out, $sts) = $d->flush();
-	    if ($sts != Compress::Zlib::Z_OK) {
-		    die "Failed to flush the deflation stream";
-	    }
-	    $retval .= $out;
-=cut
 	    $retval .= Compress::Zlib::compress($self->{buf}, Irssi::settings_get_int('ipw_ziplevel'));
 	    my $retbuf = pack("N", 4+length($retval)) . $retval;
 	local $Data::Dumper::Terse = 1;
