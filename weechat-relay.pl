@@ -13,8 +13,6 @@ no warnings 'portable';
 use Irssi;
 use Irssi::TextUI;
 
-use JSON;
-
 use Mojolicious::Lite;
 use Mojo::Server::Daemon;
 
@@ -206,9 +204,6 @@ sub ws_loop {
         $daemon->ioloop->remove($id);
     }
 }
-
-my $json = JSON->new->allow_nonref;
-$json->allow_blessed(1);
 
 sub logmsg {
     my $msg = shift;
