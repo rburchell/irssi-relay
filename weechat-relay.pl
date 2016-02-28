@@ -949,7 +949,25 @@ my %hdata_classes = (
 		type_key_refresh_needed => 'chr',
 		key_refresh_needed => sub { my ($bl, $m) = @_; $m->add_chr(0); },
 		type_key_prefix => 'str',
-		key_prefix => sub { my ($bl, $m) = @_; $m->add_string(''); },
+		key_prefix => sub {
+			# try and extract the sender's nickname out of the line..
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+			my $txt = $l->get_text(0);
+
+			# strip the timestamp (if we know how)
+			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
+
+			# TODO: isupport
+			# if you change this, also change key_message.
+			if ($txt =~ /^<[ ~&@%+]([^ ]+)> /) {
+				$m->add_string($1);
+			} elsif ($txt =~ /^\* ([^ ]+) /) {
+				$m->add_string($1);
+			} else {
+				$m->add_string("");
+			}
+		},
 		type_key_prefix_length => 'int',
 		key_prefix_length => sub { my ($bl, $m) = @_; $m->add_int(0); },
 		type_key_message => 'str',
@@ -957,8 +975,15 @@ my %hdata_classes = (
 			my ($bl, $m) = @_;
 			my ($buf, $l) = @$bl;
 			my $txt = $l->get_text(0);
+
+			# strip the timestamp (if we know how)
 			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
-		       	$m->add_string($txt);
+
+			# also strip the nickname prefix (we send this seperately, in key_prefix)
+			# TODO: isupport
+			$txt =~ s/^<[ ~&@%+]([^ ]+)> //; # if you change this, also change key_prefix.
+			$txt =~ s/^\* ([^ ]+) //;
+			$m->add_string($txt);
 		},
 	},
 );
