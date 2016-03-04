@@ -960,7 +960,7 @@ my %hdata_classes = (
 
 			# TODO: isupport
 			# if you change this, also change key_message.
-			if ($txt =~ /^<[ ~&@%+]([^ ]+)> /) {
+			if ($txt =~ /^<[ ~&@%+]*([^ ]+)> /) {
 				$m->add_string($1);
 			} elsif ($txt =~ /^\* ([^ ]+) /) {
 				$m->add_string($1);
@@ -981,7 +981,7 @@ my %hdata_classes = (
 
 			# also strip the nickname prefix (we send this seperately, in key_prefix)
 			# TODO: isupport
-			$txt =~ s/^<[ ~&@%+]([^ ]+)> //; # if you change this, also change key_prefix.
+			$txt =~ s/^<[ ~&@%+]*([^ ]+)> //; # if you change this, also change key_prefix.
 			$txt =~ s/^\* ([^ ]+) //;
 			$m->add_string($txt);
 		},
