@@ -447,6 +447,102 @@ sub hpath_tok {
 	}
 }
 
+my %ext_map = (
+	'.' => [0x10, 0],
+	'-' => [0x60, 0],
+	',' => [0xB0, 0],
+	'+' => [0x10, 1],
+	"'" => [0x60, 1],
+	'&' => [0xB0, 1],
+);
+my %style_map = (
+	b => '_',
+	c => '*',
+	d => '!',
+	f => '/',
+);
+my @irssi_weechat_color_map = (
+	# First sixteen colors are irssi's terminal colors:
+	# black, blue, green, cyan, red, magenta, yellow, white, BLACK, BLUE, GREEN, CYAN, RED, MAGENTA, YELLOW, WHITE
+	# BLACK = dark grey, white = light grey, WHITE, of course, is actual white
+	# yellow is closer to "brown"
+	1, 9, 5, 13, 3, 11, 7, 15, 2, 10, 6, 14, 4, 12, 8, 16
+);
+sub format_irssi_to_weechat {
+	my ($input) = @_;
+	my $output = "";
+	# Irssi's format codes, in a nutshell:
+	# \cDa -> blink (dropped)
+	# \cDb -> underline
+	# \cDc -> bold
+	# \cDd -> reverse
+	# \cDe -> indent marker (dropped)
+	# \cDf -> italic
+	# \cDg -> reset
+	# \cDh -> clrtoeol (dropped)
+	# \cDi -> monospace (dropped - for now)
+	# \cD?? -> (## = some values), color code 0-16, foreground and background
+	# \cD.? -> foreground color code 16-...
+	# \cD-? -> foreground color code 96-...
+	# \cD,? -> foreground color code 176-...
+	# \cD+? -> background color code 16-...
+	# \cD'? -> background color code 96-...
+	# \cD&? -> background color code 176-...
+	# \c#???? -> RGB color
+	my %state = map { $_ => 0 } keys %style_map;
+	pos($input) = 0; # Put to start of string.
+	while ($input =~ m/\G([^\cD]+(*MARK:TEXT)|\cD[abcdefghi](*MARK:STYLE)|\cD[-.,+'&].(*MARK:EXTCLR)|\cD#....(*MARK:CLR24)|\cD[^-.,+'&#].(*MARK:CLRSTD)|\cD(*MARK:BADCTRLD))/g) {
+		my $tx = $1;
+		if ($REGMARK eq 'TEXT') {
+			$output .= $tx;
+		}
+		elsif ($REGMARK eq 'STYLE') {
+			my $type = substr($tx, 1, 1);
+			if ($type eq 'g') {
+				$output .= "\x1C";
+				%state = map { $_ => 0 } keys %style_map;
+			}
+			elsif (exists $style_map{$type}) {
+				$output .= ($state{$type} ? "\x1B" : "\x1A") . $style_map{$type};
+				$state{$type} = !$state{$type};
+			}
+		}
+		elsif ($REGMARK eq 'EXTCLR') {
+			my ($e, $o) = map { ord(substr($tx, $_, 1)) } (1, 2);
+			my ($adj, $isbg) = @{$ext_map{chr($e)}};
+			my $clr = 16 + ($adj - 0x3F + $o);
+			$output .= sprintf("\x19%s@%05d", ($isbg ? "B" : "F"), $irssi_weechat_color_map[$clr]//$clr);
+		}
+		elsif ($REGMARK eq 'CLR24') {
+			# HTML color mapping
+			my ($r, $g, $b, $x) = map { ord(substr($tx, $_, 1)) } (2, 3, 4, 5); # split to chars and get charcode
+			$x -= 0x20;
+			if ($x & 0x10) { $r -= 0x20; }
+			if ($x & 0x20) { $g -= 0x20; }
+			if ($x & 0x40) { $b -= 0x20; }
+			logmsg(sprintf("HTML color decoded: #%02x%02x%02x", $r, $g, $b));
+			# But what the heck to do with it? Weechat doesn't seem to have 24-bit color...
+		}
+		elsif ($REGMARK eq 'CLRSTD') {
+			my ($f, $b) = map { ord(substr($tx, $_, 1)) } (1, 2);
+			if ($f > ord('?') || $f < ord('0')) { $f = 0; }
+			else { $f -= ord('0'); $f = $irssi_weechat_color_map[$f]//$f; }
+			if ($b > ord('?') || $b < ord('0')) { $b = 0; }
+			else { $b -= ord('0'); $b = $irssi_weechat_color_map[$b]//$b; }
+			$output .= sprintf("\x19*%02d,%02d", $f, $b);
+		}
+		else {
+			# ...
+		}
+	}
+	# Simplify the output string (e.g. combine colors and attribute-sets, combine fg/bg)
+	# Combine foreground/background consecutives:
+#	$output =~ s/[\x19]F(@?\d+)[\x19]B(@?\d+)/\x19*$1,$2/g;
+#	$output =~ s/[\x19]B(@?\d+)[\x19]F(@?\d+)/\x19*$2,$1/g;
+#	$output =~ s/[\x1A](.)[\x19]
+	return $output;
+}
+
 # Basic signature for an hdata handler:
 # list_<n> : Subroutine called when requesting top-level list <n>, the counter value will be passed.
 #   Return value should be the list of objects from the list.
@@ -974,15 +1070,21 @@ my %hdata_classes = (
 		key_message => sub {
 			my ($bl, $m) = @_;
 			my ($buf, $l) = @$bl;
-			my $txt = $l->get_text(0);
+			my $txt = $l->get_text(1); # WE NOW ARE RETURNING LINES WITH COLORS!!!
 
 			# strip the timestamp (if we know how)
 			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
 
 			# also strip the nickname prefix (we send this seperately, in key_prefix)
 			# TODO: isupport
-			$txt =~ s/^<[ ~&@%+]*([^ ]+)> //; # if you change this, also change key_prefix.
-			$txt =~ s/^\* ([^ ]+) //;
+			#$txt =~ s/^<[ ~&@%+]*([^ ]+)> //; # if you change this, also change key_prefix.
+			#$txt =~ s/^\* ([^ ]+) //;
+
+			$txt = format_irssi_to_weechat($txt);
+			
+			my $once = 0;
+			$txt =~ s/[\cC\cD\c_\cB\cV\cO]/$once||=do{logmsg("WARNING: THERE ARE STILL IRSSI CODES IN THIS MESSAGE! $txt");1;}; "";/ge;
+
 			$m->add_string($txt);
 		},
 	},
