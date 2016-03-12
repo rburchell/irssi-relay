@@ -549,8 +549,10 @@ sub separate_message_and_prefix {
 	### It would probably be better as another /set to deal with
 	### things like non-ANSI character sets.
 	my $clrs = qr/(?:\cD(?:[a-i]|#....|..))*/; # quick regex for colorcode skipping
-	# Below regex based on inspircd nick validation. At most one non-nick char allowed with intervening color codes.
-	my $nickreg = qr/$clrs[^0-9A-}-]?$clrs[0-9A-}][A-}0-9-]+/;
+	# Below regex based on inspircd nick validation.
+	my $nickreg = qr/[0-9A-}][A-}0-9-]+/;
+	my $pfxs = join "", (map { $_->isupport("PREFIX") =~ m/^\(\w+\)(.*)$/ and $1 or '@+'; } Irssi::servers());
+	my $pfxrx = qr/[ \Q$pfxs\E]/;
 	if ($txt =~ m/\cDe/p) {
 		my ($pfx, $msg) = (
 			${^PREMATCH},
@@ -564,7 +566,7 @@ sub separate_message_and_prefix {
 	}
 	# The below all pretty much will only work under the default.theme. I'm not a fan of this, but it's a start.
 	# Standard messages: <@nick> message
-	elsif ($txt =~ m/$clrs<$clrs($nickreg)$clrs>$clrs /p) {
+	elsif ($txt =~ m/$clrs<(${clrs}${pfxrx}${clrs}${nickreg})$clrs>$clrs /p) {
 		my ($pfx, $msg) = (
 			$1,
 			${^POSTMATCH},
