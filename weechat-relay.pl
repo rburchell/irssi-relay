@@ -21,7 +21,7 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-use v5.12;
+use v5.18;
 
 use strict;
 use warnings 'all';
@@ -543,6 +543,48 @@ sub format_irssi_to_weechat {
 	return $output;
 }
 
+sub separate_message_and_prefix {
+	my ($txt) = @_;
+	### XXX Right now the nick selection regex is hardcoded.
+	### It would probably be better as another /set to deal with
+	### things like non-ANSI character sets.
+	my $clrs = qr/(?:\cD(?:[a-i]|#....|..))*/; # quick regex for colorcode skipping
+	# Below regex based on inspircd nick validation. At most one non-nick char allowed with intervening color codes.
+	my $nickreg = qr/$clrs[^0-9A-}-]?$clrs[0-9A-}][A-}0-9-]+/;
+	if ($txt =~ m/\cDe/p) {
+		my ($pfx, $msg) = (
+			${^PREMATCH},
+			${^POSTMATCH},
+		);
+		if ($pfx =~ m/($nickreg)/)
+		{
+			$pfx = $1;
+		}
+		return $pfx, $msg;
+	}
+	# The below all pretty much will only work under the default.theme. I'm not a fan of this, but it's a start.
+	# Standard messages: <@nick> message
+	elsif ($txt =~ m/$clrs<$clrs($nickreg)$clrs>$clrs /p) {
+		my ($pfx, $msg) = (
+			$1,
+			${^POSTMATCH},
+		);
+		return $pfx, $msg;
+	}
+	# -!- and -!- Irssi: cases
+	elsif ($txt =~ m/$clrs-$clrs!$clrs-$clrs(?: ${clrs}Irssi:$clrs)?/p) {
+		my ($pfx, $msg) = (
+			${^MATCH},
+			${^POSTMATCH},
+		);
+		return $pfx, $msg;
+	}
+	else {
+		return "", $txt;
+	}
+
+}
+
 # Basic signature for an hdata handler:
 # list_<n> : Subroutine called when requesting top-level list <n>, the counter value will be passed.
 #   Return value should be the list of objects from the list.
@@ -1049,20 +1091,15 @@ my %hdata_classes = (
 			# try and extract the sender's nickname out of the line..
 			my ($bl, $m) = @_;
 			my ($buf, $l) = @$bl;
-			my $txt = $l->get_text(0);
+			my $txt = $l->get_text(1);
 
 			# strip the timestamp (if we know how)
 			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
 
-			# TODO: isupport
-			# if you change this, also change key_message.
-			if ($txt =~ /^<[ ~&@%+]*([^ ]+)> /) {
-				$m->add_string($1);
-			} elsif ($txt =~ /^\* ([^ ]+) /) {
-				$m->add_string($1);
-			} else {
-				$m->add_string("");
-			}
+			my ($pfx, $msg) = separate_message_and_prefix($txt);
+			$pfx = format_irssi_to_weechat($pfx);
+
+			$m->add_string($pfx);
 		},
 		type_key_prefix_length => 'int',
 		key_prefix_length => sub { my ($bl, $m) = @_; $m->add_int(0); },
@@ -1080,12 +1117,14 @@ my %hdata_classes = (
 			#$txt =~ s/^<[ ~&@%+]*([^ ]+)> //; # if you change this, also change key_prefix.
 			#$txt =~ s/^\* ([^ ]+) //;
 
-			$txt = format_irssi_to_weechat($txt);
+			my ($pfx, $msg) = separate_message_and_prefix($txt);
+
+			$msg = format_irssi_to_weechat($msg);
 			
 			my $once = 0;
-			$txt =~ s/[\cC\cD\c_\cB\cV\cO]/$once||=do{logmsg("WARNING: THERE ARE STILL IRSSI CODES IN THIS MESSAGE! $txt");1;}; "";/ge;
+			$msg =~ s/[\cC\cD\c_\cB\cV\cO]/$once||=do{logmsg("WARNING: THERE ARE STILL IRSSI CODES IN THIS MESSAGE! $msg");1;}; "";/ge;
 
-			$m->add_string($txt);
+			$m->add_string($msg);
 		},
 	},
 );
