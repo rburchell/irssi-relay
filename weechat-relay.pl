@@ -1128,7 +1128,17 @@ my %hdata_classes = (
 			$m->add_string($pfx);
 		},
 		type_key_prefix_length => 'int',
-		key_prefix_length => sub { my ($bl, $m) = @_; $m->add_int(0); },
+		key_prefix_length => sub {
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+			my $txt = $l->get_text(1);
+
+			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
+			my ($pfx, $msg) = separate_messsage_and_prefix($txt);
+			$pfx = format_irssi_to_weechat($pfx);
+
+			$m->add_int(length $pfx);
+		},
 		type_key_message => 'str',
 		key_message => sub {
 			my ($bl, $m) = @_;
