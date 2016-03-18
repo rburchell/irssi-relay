@@ -553,24 +553,48 @@ sub separate_message_and_prefix {
 	my $nickreg = qr/[0-9A-}][A-}0-9-]+/;
 	my $pfxs = join "", (map { $_->isupport("PREFIX") =~ m/^\(\w+\)(.*)$/ and $1 or '@+'; } Irssi::servers());
 	my $pfxrx = qr/[ \Q$pfxs\E]/;
+	# This was a good idea if irssi's themes were a bit more consistent with using it. Sadly, it is not, so it goes away.
+=if0
 	if ($txt =~ m/\cDe/p) {
 		my ($pfx, $msg) = (
 			${^PREMATCH},
 			${^POSTMATCH},
 		);
+		# Gather up all format codes in the prefix and replay them in the message, so that
+		# the color changes correctly carry over.
+		my $allclrs = join "", ($pfx =~ m/$clrs/g);
+		$msg = $allclrs . $msg;
 		if ($pfx =~ m/($nickreg)/)
 		{
 			$pfx = $1;
 		}
 		return $pfx, $msg;
 	}
+=cut
 	# The below all pretty much will only work under the default.theme. I'm not a fan of this, but it's a start.
 	# Standard messages: <@nick> message
-	elsif ($txt =~ m/$clrs<(${clrs}${pfxrx}${clrs}${nickreg})$clrs>$clrs /p) {
-		my ($pfx, $msg) = (
+	if ($txt =~ m/^($clrs)<(${clrs}${pfxrx}${clrs}${nickreg})${clrs}>$clrs /p) {
+		my ($rawpfx, $initclrs, $pfx, $msg) = (
+			${^MATCH},
 			$1,
+			$2,
 			${^POSTMATCH},
 		);
+		# Make sure the initial colors are correctly applied to the nick:
+		$pfx = $initclrs . $pfx;
+		# Also replay all color codes from the prefix into the message.
+		my $allclrs = join "", ($rawpfx =~ m/$clrs/g);
+		$msg = $allclrs . $msg;
+		return $pfx, $msg;
+	}
+	# Action messages: * @nick message
+	elsif ($txt =~ m/^(${clrs}\s*${clrs}\*${clrs})\s*(${clrs}${pfxrx}?${clrs}${nickreg}${clrs}\s+.*)/) {
+		my ($pfx, $msg) = (
+			$1,
+			$2,
+		);
+		my $allclrs = join "", ($pfx =~ m/$clrs/g);
+		$msg = $allclrs . $msg;
 		return $pfx, $msg;
 	}
 	# -!- and -!- Irssi: cases
@@ -582,7 +606,7 @@ sub separate_message_and_prefix {
 		return $pfx, $msg;
 	}
 	else {
-		return "", $txt;
+		return "--\cDg", $txt;
 	}
 
 }
