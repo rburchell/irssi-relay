@@ -1435,6 +1435,13 @@ sub parse_input
 		my $ptr = hex($target);
 		$buf = $hdata_classes{buffer}->{from_pointer}->($ptr);
 	}
+	elsif ($target eq 'core.weechat') {
+		# Intercept commands sent to core.weechat and emulate (some of) them:
+		if ($arguments =~ m[^/buffer (.*)]) {
+			$buf = get_window_from_weechat_name($1);
+			Irssi::signal_emit("window dehilight", $buf);
+		}
+	}
 	else
 	{
 		$buf = get_window_from_weechat_name($target);
