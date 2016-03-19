@@ -1436,11 +1436,13 @@ sub parse_input
 		$buf = $hdata_classes{buffer}->{from_pointer}->($ptr);
 	}
 	elsif ($target eq 'core.weechat') {
+		logmsg("Intercepting core.weechat command: $input");
 		# Intercept commands sent to core.weechat and emulate (some of) them:
-		if ($arguments =~ m[^/buffer (.*)]) {
+		if ($input =~ m[^/buffer (.*)]) {
 			$buf = get_window_from_weechat_name($1);
 			Irssi::signal_emit("window dehilight", $buf);
 		}
+		return;
 	}
 	else
 	{
