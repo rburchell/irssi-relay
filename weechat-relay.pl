@@ -867,28 +867,53 @@ my %hdata_classes = (
 	hotlist => {
 		list_gui_hotlist => sub {
 			my ($ct) = @_;
-			return ();
+			return grep { $_->{data_level} > 0 } Irssi::windows();
+		},
+		get_pointer => sub {
+			my ($w) = @_; # Irssi::Window
+			return $w->{_irssi};
+		},
+		from_pointer => sub {
+			my ($p) = @_;
+			my @w = Irssi::windows();
+			my ($w) = grep { $_->{_irssi} == $p } @w;
+			return $w;
 		},
 		type_key_priority => 'int',
 		key_priority => sub {
-			my ($o, $m) = @_;
-			$m->add_int(0);
+			my ($w, $m) = @_;
+			if ($w->{data_level} == 1) { # DATA_LEVEL_TEXT
+				$m->add_int(0); # GUI_HOTLIST_LOW
+			}
+			elsif ($w->{data_level} == 2) { # DATA_LEVEL_MSG
+				$m->add_int(1); # GUI_HOTLIST_MESSAGE
+			}
+			elsif ($w->{data_level} == 3) { # DATA_LEVEL_HILIGHT
+				$m->add_int(3); # GUI_HOTLIST_HIGHLIGHT
+			}
+			else {
+				$m->add_int(0); # GUI_HOTLIST_LOW
+			}
 		},
 		type_key_creation_time => 'tim',
 		key_creation_time => sub {
-			my ($o, $m) = @_;
-			$m->add_string_shortlength("0");
+			my ($w, $m) = @_;
+			$m->add_string_shortlength(sprintf("%d", $w->{last_line}));
 		},
 		type_key_buffer => 'ptr',
 		key_buffer => sub {
-			my ($o, $m) = @_;
-			$m->add_ptr(0);
+			my ($w, $m) = @_;
+			$m->add_ptr($w->{_irssi});
 		},
 		type_key_count => 'arr',
 		key_count => sub {
-			my ($o, $m) = @_;
+			my ($w, $m) = @_;
 			$m->add_type("int");
+			$m->add_int(4);
+			$m->add_int($w->{data_level} == 1 || 0); # || 0 looks odd until you remember that "false" from > is "" not 0.
+			$m->add_int($w->{data_level} == 2 || 0); # || 0 looks odd until you remember that "false" from > is "" not 0.
 			$m->add_int(0);
+			$m->add_int($w->{data_level} == 3 || 0); # || 0 looks odd until you remember that "false" from > is "" not 0.
 		},
 	},
 	lines => {
@@ -1134,7 +1159,7 @@ my %hdata_classes = (
 			my $txt = $l->get_text(1);
 
 			defined($tsrx) and $txt =~ s/^${tsrx}\s*//;
-			my ($pfx, $msg) = separate_messsage_and_prefix($txt);
+			my ($pfx, $msg) = separate_message_and_prefix($txt);
 			$pfx = format_irssi_to_weechat($pfx);
 
 			$m->add_int(length $pfx);
