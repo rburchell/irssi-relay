@@ -1187,6 +1187,25 @@ my %hdata_classes = (
 
 			$m->add_string($msg);
 		},
+		type_key_tags_array => 'arr',
+		key_tags_array => sub {
+			my ($bl, $m) = @_;
+			my ($buf, $l) = @$bl;
+			$m->add_type('str');
+			my @tags;
+			my $lvl = $l->{info}->{level};
+			my $msglvl = Irssi::settings_get_level("activity_hilight_level") | Irssi::settings_get_level("activity_msg_level");
+			# This is a good choice because its default is MSGS DCCMSGS
+			my $privlvl = Irssi::settings_get_level('activity_hilight_level');
+			my $nolvl = Irssi::settings_get_level('activity_hide_level');
+			(($lvl & $privlvl) != 0) and push @tags, "notify_private";
+			(($lvl & $msglvl) != 0) and push @tags, "notify_message";
+			(($lvl & $nolvl) != 0) and push @tags, "notify_none";
+			(($lvl & Irssi::MSGLEVEL_HILIGHT) != 0) and push @tags, "notify_highlight";
+
+			$m->add_int(scalar @tags);
+			$m->add_string($_) for @tags;
+		},
 	},
 );
 
