@@ -525,11 +525,23 @@ sub format_irssi_to_weechat {
 		}
 		elsif ($REGMARK eq 'CLRSTD') {
 			my ($f, $b) = map { ord(substr($tx, $_, 1)) } (1, 2);
-			if ($f > ord('?') || $f < ord('0')) { $f = 0; }
+			if ($f == ord('/')) { $f = undef; }
+			elsif ($f > ord('?') || $f < ord('0')) { $f = 0; }
 			else { $f -= ord('0'); $f = $irssi_weechat_color_map[$f]//$f; }
-			if ($b > ord('?') || $b < ord('0')) { $b = 0; }
+			
+			if ($b == ord('/')) { $b = undef; }
+			elsif ($b > ord('?') || $b < ord('0')) { $b = 0; }
 			else { $b -= ord('0'); $b = $irssi_weechat_color_map[$b]//$b; }
-			$output .= sprintf("\x19*%02d,%02d", $f, $b);
+
+			if (defined($f) && defined($b)) {
+				$output .= sprintf("\x19*%02d,%02d", $f, $b);
+			}
+			elsif (defined($f)) {
+				$output .= sprintf("\x19F%02d", $f);
+			}
+			elsif (defined($b)) {
+				$output .= sprintf("\x19B%02d", $b);
+			}
 		}
 		else {
 			# ...
@@ -1608,7 +1620,7 @@ sub parse_nicklist {
 	my ($client, $id, $arguments) = @_;
 	my @buf;
 	my $bufarg;
-	logmsg("Got NICKLIST ($id) for $arguments");
+	logmsg("Got NICKLIST for $arguments");
 	if (ref($arguments) && $arguments->DOES("Irssi::UI::Window"))
 	{
 		$arguments->{_irssi} or do { Carp::cluck("Why is this undefined?"); };
@@ -1733,12 +1745,25 @@ sub parse_nicklist {
 sub process_message {
     my ($client, $message) = @_;
 
-    my ($id, $command, $arguments) = ("", "", "");
+    my ($id, $command, $arguments);
 
     $message =~ s/\n$//;
     #logmsg("Processing: $message");
 
     # Commands have format: "(id) command arguments\n".
+
+	if ($message =~ m/^\(([^\)]+)\) (.*)/) {
+		($id, $message) = ($1, $2);
+	}
+	else {
+		$id = undef;
+	}
+
+	($command, $arguments) = split / +/, $message, 2;
+
+	$arguments//="";
+
+=if0
     if ($message =~ /^\(([^ ]+)\) ([^ ]+) (.+)$/) {
         $id = $1;
         $command = $2;
@@ -1751,6 +1776,7 @@ sub process_message {
         logmsg("Got a bad message: $message");
         return
     }
+=cut
 
 		if ($command eq 'init') {
 			parse_init($client, $id, $arguments);
@@ -1814,6 +1840,7 @@ sub process_message {
 		}
 		else {
 			logmsg("Unhandled: $message");
+			$id//="(null)";
 			logmsg("ID: $id COMMAND: $command ARGS: $arguments");
 		}
 }
