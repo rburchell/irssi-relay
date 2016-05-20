@@ -425,7 +425,7 @@ sub parse_info {
         my $obj = WeechatMessage::new();
         $obj->add_string($id);
         $obj->add_type("inf");
-        $obj->add_info("version", "0.9-compatible-irssi-" . (Irssi::parse_special('$J') =~ s/\./_/gr) . "-script-" . ("$VERSION" =~ s/\./_/gr));
+        $obj->add_info("version", "1.4");
         sendto_client($client, (should_compress($client) ? $obj->get_zipped_buffer() : $obj->get_buffer()));
     } else {
         logmsg("Unknown INFO requested: $arguments");
@@ -1450,6 +1450,12 @@ sub parse_input
 	}
 	my $oldw = Irssi::active_win();
 	$buf//return;
+	if ($input =~ m[^(/buffer set hotlist -1|/input set_unread_current_buffer)]) {
+		Irssi::signal_emit("window dehilight" => $buf);
+		return;
+	}
+	# Remove -noswitch from /join,/query
+	$input =~ s{^(/(join|query)) -noswitch}{};
 	$buf->set_active();
 	#$buf->command($input);
 	my $s = $buf->{active_server};
