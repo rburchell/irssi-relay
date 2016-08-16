@@ -1,31 +1,31 @@
-# irssi-relay
+# Weechat Relay
 
-irssi-relay is a simple script to provide a representation of irssi's data
+Weechat Relay is a simple script to provide a representation of irssi's data
 structures using the [weechat relay
 protocol](https://www.weechat.org/files/doc/devel/weechat_relay_protocol.en.html).
 
-simply put, it allows you to use the same irc connection you know and love from
+Simply put, it allows you to use the same IRC connection you know and love from
 other user interfaces, like [glowing-bear](https://github.com/glowing-bear/glowing-bear).
 
-# contact
+# Contact
 
-get in touch with us, on irc of course. ;) we hang out on ##irssi-relay on freenode.
+Get in touch with us, on IRC of course. ;) We hang out on ##irssi-relay on freenode.
 
-# patches
+# Patches
 
-got an itch to scratch? that's great. feel free to submit a pull request! :)
+Got an itch to scratch? That's great. Feel free to submit a pull request! :)
 
-# use
+# Use
 
-* put the script in your .irssi/scripts/autorun directory.
-* configure it (see the ipw_ settings, most interesting ones are ipw_port,
-  ipw_host and ipw_password)
-* load it (using `/script load autorun/weechat-relay.pl`)
-* connect your client
+* Put the script in your .irssi/scripts/autorun directory.
+* Configure it (see the wcrelay_ settings, most interesting ones are wcrelay_port,
+  wcrelay_host and wcrelay_password)
+* Load it (using `/script load autorun/weechat_relay.pl`)
+* Connect your client
 
-# authors
+# Authors
 
-irssi-relay is the culmination of a tireless amount of effort from (but not
+Weechat Relay is the culmination of a tireless amount of effort from (but not
 limited to) the following people:
 
 * Thomas Stagner (large amounts of implementation, reverse-engineering)

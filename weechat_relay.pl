@@ -2,6 +2,7 @@
 # Copyright (c) 2016 Thomas Stagner <aquanight@gmail.com>
 # Copyright (c) 2015-2016 Robin Burchell <robin.burchell@viroteck.net>
 # Copyright (c) 2011-2012 Timothy J Fontaine
+# https://github.com/rburchell/irssi-relay
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -39,40 +40,39 @@ use File::Spec;
 
 use Carp ();
 
-my $have_compression;
-BEGIN {
-	eval {
-		require Compress::Zlib;
-		import Compress::Zlib;
-		$have_compression = 1;
-	};
-}
-
-our $VERSION = '0.0.1';
+our $VERSION = '0.0.2';
 our %IRSSI = (
-  authors => 'irssi-relay authors',
+  authors => 'weechat_relay.pl authors',
   contact => 'robin.burchell@viroteck.net',
-  name    => 'irssi_proxy_websocket',
+  name    => 'Weechat Relay',
   license => 'MIT',
-  description => 'Proxy module that listens on a WebSocket',
+  description => 'Weechat relay protocol implementation',
+  changed => '2016-08-18'
 );
 
 Irssi::theme_register([
- 'irssi_proxy_websocket',
+ 'weechat_relay',
  '{line_start}{hilight ' . $IRSSI{'name'} . ':} $0'
 ]);
 
-Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_host', 'localhost');
-Irssi::settings_add_int('irssi_proxy_websocket', 'ipw_port', 9001);
-Irssi::settings_add_bool('irssi_proxy_websocket', 'ipw_ssl', 0);
-Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_cert', '');
-Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_key', '');
-Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_password', '');
-Irssi::settings_add_str('irssi_proxy_websocket', 'ipw_docroot', File::Spec->catdir(dirname(__FILE__), 'client'));
-if ($have_compression) {
-	Irssi::settings_add_bool('irssi_proxy_websocket', 'ipw_compress', 0);
-	Irssi::settings_add_int('irssi_proxy_websocket', 'ipw_ziplevel', Compress::Zlib::Z_DEFAULT_COMPRESSION);
+my @needs = ('Compress::Zlib', 'IO::Socket::SSL', 'Mojolicious::Lite', 'Mojo::Server::Daemon');
+foreach my $need (@needs) {
+	eval("use $need");
+	if ($@) {
+		Irssi::print($IRSSI{'name'} . " requires Compress::Zlib, IO::Socket::SSL, Mojolicious::Lite and Mojo::Server::Daemon");
+		Irssi::print("To install these modules execute:");
+		Irssi::print("cpan install Compress::Zlib IO::Socket::SSL Mojolicious::Lite Mojo::Server::Daemon");
+		die();
+	}
 }
+
+Irssi::settings_add_str('weechat_relay', 'wcrelay_host', 'localhost');
+Irssi::settings_add_int('weechat_relay', 'wcrelay_port', 9001);
+Irssi::settings_add_bool('weechat_relay', 'wcrelay_ssl', 0);
+Irssi::settings_add_str('weechat_relay', 'wcrelay_cert', '');
+Irssi::settings_add_str('weechat_relay', 'wcrelay_key', '');
+Irssi::settings_add_str('weechat_relay', 'wcrelay_password', '');
+Irssi::settings_add_int('weechat_relay', 'wcrelay_ziplevel', Compress::Zlib::Z_DEFAULT_COMPRESSION);
 
 my $tsfmt = Irssi::settings_get_str("timestamp_format");
 my $tsrxval;
@@ -102,14 +102,14 @@ $tsrxval = $tsfmt =~ s/(%[aAbBhpPZ](*MARK:TEXT)|%(?:[CdGgHIjmMsSuUVwWyY]|E[CyY]|
 /ger; # g = replace-all, e = replacement is actually code, r = leave $tsfmt unchanged, return result to put in $tsrx
 
 # Now add the regex settings
-Irssi::settings_add_str(irssi_proxy_websocket => 'ipw_strip_prefix', $tsrxval);
+Irssi::settings_add_str(weechat_relay => 'wcrelay_strip_prefix', $tsrxval);
 
 my $tsrx;
 
 sub _load_regex {
 	$tsrx = undef;
 	# Now GET the actual regex string currently set (since irssi may have loaded some other value from config)
-	$tsrxval = Irssi::settings_get_str('ipw_strip_prefix');
+	$tsrxval = Irssi::settings_get_str('wcrelay_strip_prefix');
 
 	# Now compile it:
 	eval {
@@ -119,7 +119,7 @@ sub _load_regex {
 	};
 	if ($@) {
 		my $msg = ($@ =~ s/ at .* line \d+//r);
-		Irssi::print("Your ipw_strip_prefix setting has errors: $msg");
+		Irssi::print("Your wcrelay_strip_prefix setting has errors: $msg");
 		Irssi::print("Line prefixes will not be stripped until this is corrected.");
 	}
 }
@@ -133,7 +133,9 @@ my %clients = ();
 sub ws_loop;
 
 sub demojoify {
-	Irssi::timeout_remove($loop_id);
+	if (defined($loop_id)) {
+		Irssi::timeout_remove($loop_id);
+	}
 	# TODO: is daemon cleared up properly? and finish this
 	$daemon->stop();
 	my @c = values %clients;
@@ -152,23 +154,27 @@ sub mojoify {
     unless (-e $logdir) { mkdir $logdir; }
     if (!-d $logdir) { warn "Log directory is not a directory"; app->log(Mojo::Log->new("/dev/null")); }
     else {
-	    app->log(Mojo::Log->new(path => "$logdir/weechat-relay.log"));
+	    app->log(Mojo::Log->new(path => "$logdir/weechat_relay.log"));
     }
 
     app->log->level('debug');
 
-    app->static->paths->[0] = Irssi::settings_get_str('ipw_docroot');
     my $listen_url;
 
-    my $host = Irssi::settings_get_str('ipw_host');
-    my $port = Irssi::settings_get_int('ipw_port');
-    my $cert = Irssi::settings_get_str('ipw_cert');
-    my $key  = Irssi::settings_get_str('ipw_key');
+    my $host = Irssi::settings_get_str('wcrelay_host');
+    my $port = Irssi::settings_get_int('wcrelay_port');
+    my $cert = Irssi::settings_get_str('wcrelay_cert');
+    my $key  = Irssi::settings_get_str('wcrelay_key');
 
-    %settings = (host => $host, port => $port, cert => $cert, key => $key, ssl => Irssi::settings_get_bool('ipw_ssl'), docroot => Irssi::settings_get_str('ipw_docroot'));
+    %settings = (host => $host, port => $port, cert => $cert, key => $key, ssl => Irssi::settings_get_bool('wcrelay_ssl'));
 
-    if(Irssi::settings_get_bool('ipw_ssl') && -e $cert && -e $key) {
-        $listen_url = sprintf("https://%s:%d:%s:%s", $host, $port, $cert, $key);
+    if(Irssi::settings_get_bool('wcrelay_ssl')) {
+	if (-e $cert && -e $key) {
+	        $listen_url = sprintf("https://%s:%d?cert=%s&key=%s", $host, $port, $cert, $key);
+	} else {
+		Irssi::print($IRSSI{'name'} . " was unable to read the configured SSL certificate (wcrelay_cert) or private key (wcrelay_key)");
+		return;
+	}
     } else {
         $listen_url = sprintf("http://%s:%d", $host, $port);
     }
@@ -186,8 +192,8 @@ mojoify();
 
 sub setup_changed {
     my ($cert, $key);
-    $cert = Irssi::settings_get_str('ipw_cert');
-    $key  = Irssi::settings_get_str('ipw_key');
+    $cert = Irssi::settings_get_str('wcrelay_cert');
+    $key  = Irssi::settings_get_str('wcrelay_key');
 
     if(length($cert) && !-e $cert) {
         logmsg("Certificate file doesn't exist: $cert");
@@ -199,21 +205,19 @@ sub setup_changed {
     # If any connection settings changed, stop and restart the mojo server. NOTE: this means we also disconnect all relays!
     # NOTE: password changes do NOT force a stop/restart
     if (
-        $settings{host} ne Irssi::settings_get_str('ipw_host') ||
-        $settings{port} != Irssi::settings_get_int('ipw_port') ||
-	$settings{cert} ne Irssi::settings_get_str('ipw_cert') ||
-	$settings{key}  ne Irssi::settings_get_str('ipw_key')  ||
-	$settings{ssl}  != Irssi::settings_get_bool('ipw_ssl') ||
-	$settings{docroot} ne Irssi::settings_get_str('ipw_docroot')) {
+	$settings{host} ne Irssi::settings_get_str('wcrelay_host') ||
+	$settings{port} != Irssi::settings_get_int('wcrelay_port') ||
+	$settings{cert} ne Irssi::settings_get_str('wcrelay_cert') ||
+	$settings{key}  ne Irssi::settings_get_str('wcrelay_key')  ||
+	$settings{ssl}  != Irssi::settings_get_bool('wcrelay_ssl')) {
 	
-	# Stop the server and reinitialize it.
-	demojoify();
-	# Now restart it.
-	mojoify();
+	# Irssi will sometimes crash here when settings are changed and we only demojoify() and mojoify()
+	# Let's just let Irssi clean up our mess
+	Irssi::print($IRSSI{'name'} . ' must be reloaded to use updated connection settings.');
    }
 
     # Did the regex setting change?
-    if ($tsrxval ne Irssi::settings_get_str('ipw_strip_prefix'))
+    if ($tsrxval ne Irssi::settings_get_str('wcrelay_strip_prefix'))
     {
 	    _load_regex();
     }
@@ -229,7 +233,7 @@ sub ws_loop {
 
 sub logmsg {
     my $msg = shift;
-#    Irssi::printformat(MSGLEVEL_CLIENTCRAP, 'irssi_proxy_websocket', $msg);
+#    Irssi::printformat(MSGLEVEL_CLIENTCRAP, 'weechat_relay', $msg);
     app->log->info($msg);
 }
 
@@ -288,7 +292,7 @@ sub parse_init {
 	    $chash->{compression} = $value;
         } elsif ($key eq 'password') {
             # TODO
-	    my $tpass = Irssi::settings_get_str('ipw_password');
+	    my $tpass = Irssi::settings_get_str('wcrelay_password');
             if ($value eq $tpass) {
 	            $chash->{'authenticated'} = 1;
 	            logmsg("Client has successfully authenticated");
@@ -299,13 +303,6 @@ sub parse_init {
     }
 }
 
-sub should_compress {
-	my ($client) = @_;
-	$have_compression or return "";
-	Irssi::settings_get_bool('ipw_compress') or return "";
-	return $clients{$client}->{compression} ne 'off';
-}
-
 package WeechatMessage {
     sub new {
         my $self = bless {};
@@ -314,7 +311,6 @@ package WeechatMessage {
 
     sub init {
         my $self = shift;
-	#$self->{buf} = "\0"; # we don't support compression
         return $self;
     }
 
@@ -387,20 +383,9 @@ package WeechatMessage {
     }
 
     sub get_buffer {
-        my ($self) = @_;
-	my $retval = "\0" . $self->{buf};
-        my $retbuf = pack("N", 4+length($retval)) . $retval;
-	local $Data::Dumper::Terse = 1;
-	local $Data::Dumper::Useqq = 1;
-	$logmsg->("Buffer contents are: " . Data::Dumper->Dump([$retbuf], ['retbuf']));
-        return $retbuf;
-    }
-
-    sub get_zipped_buffer {
 	    my ($self) = @_;
 	    my $retval = "\1";
-	    $have_compression or Carp::croak("Compression not available, caller didn't check should_compress?");
-	    $retval .= Compress::Zlib::compress($self->{buf}, Irssi::settings_get_int('ipw_ziplevel'));
+	    $retval .= Compress::Zlib::compress($self->{buf}, Irssi::settings_get_int('wcrelay_ziplevel'));
 	    my $retbuf = pack("N", 4+length($retval)) . $retval;
 	local $Data::Dumper::Terse = 1;
 	local $Data::Dumper::Useqq = 1;
@@ -426,7 +411,7 @@ sub parse_info {
         $obj->add_string($id);
         $obj->add_type("inf");
         $obj->add_info("version", "1.4");
-        sendto_client($client, (should_compress($client) ? $obj->get_zipped_buffer() : $obj->get_buffer()));
+        sendto_client($client, $obj->get_buffer());
     } else {
         logmsg("Unknown INFO requested: $arguments");
     }
@@ -1392,7 +1377,7 @@ sub parse_hdata {
 
 	if (defined($client))
 	{
-		sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
+		sendto_client($client, $m->get_buffer());
 		return;
 	}
 	else
@@ -1569,7 +1554,6 @@ sub dispatch_event_message
 	my ($msg, @targets) = @_;
 
 	my $data = $msg->get_buffer();
-	my $zdata = $msg->get_zipped_buffer();
 
 	my %clients = ();
 
@@ -1600,7 +1584,7 @@ sub dispatch_event_message
 	for my $k (keys %clients)
 	{
 		my $cli = $clients{$k};
-		sendto_client($cli, (should_compress($cli) ? $zdata : $data));
+		sendto_client($cli, $data);
 	}
 }
 
@@ -1736,7 +1720,7 @@ sub parse_nicklist {
 	}
 	$m->set_int($ctpos, $objct);
 	if (defined($client)) {
-		sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
+		sendto_client($client, $m->get_buffer());
 	} else {
 		return $m;
 	}
@@ -1826,14 +1810,14 @@ sub process_message {
 			$m->add_type('tim')->add_string_shortlength("1321993456");
 			$m->add_type('arr')->add_type('str')->add_int(2)->add_string("abc")->add_string("def");
 			$m->add_type('arr')->add_type('int')->add_int(3)->add_int(123)->add_int(456)->add_int(789);
-			sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
+			sendto_client($client, $m->get_buffer());
 		}
 		elsif ($command eq 'ping') {
 			my $m = WeechatMessage->new();
 			$m->add_string("_pong");
 			$m->add_type('str');
 			$m->add_string($arguments);
-			sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
+			sendto_client($client, $m->get_buffer());
 		}
 		elsif ($command eq 'nicklist') {
 			parse_nicklist($client, $id, $arguments);
@@ -2204,5 +2188,3 @@ sub UNLOAD {
 	demojoify();
 	Symbol::delete_package("WeechatMessage");
 }
-
-
