@@ -133,9 +133,10 @@ my %clients = ();
 sub ws_loop;
 
 sub demojoify {
-	Irssi::timeout_remove($loop_id);
+	defined($loop_id) and Irssi::timeout_remove($loop_id);
 	# TODO: is daemon cleared up properly? and finish this
-	$daemon->stop();
+	defined($daemon) and $daemon->stop();
+	$daemon = undef;
 	my @c = values %clients;
 	$_->{client}->finish() for @c;
 	# Block until all ->finish calls complete.
@@ -162,19 +163,30 @@ sub mojoify {
 
     my $host = Irssi::settings_get_str('ipw_host');
     my $port = Irssi::settings_get_int('ipw_port');
+    # $cert and $key now optional values. If they're not present we'll use Mojo's default test certs
     my $cert = Irssi::settings_get_str('ipw_cert');
     my $key  = Irssi::settings_get_str('ipw_key');
 
     %settings = (host => $host, port => $port, cert => $cert, key => $key, ssl => Irssi::settings_get_bool('ipw_ssl'), docroot => Irssi::settings_get_str('ipw_docroot'));
 
-    if(Irssi::settings_get_bool('ipw_ssl') && -e $cert && -e $key) {
-        $listen_url = sprintf("https://%s:%d:%s:%s", $host, $port, $cert, $key);
+    if(Irssi::settings_get_bool('ipw_ssl')) {
+        if (-r $cert && -r $key) {
+            $listen_url = sprintf("https://%s:%d?cert=%s&key=%s", $host, $port, $cert, $key);
+        }
+	else {
+            $listen_url = sprintf("https://%s:%d", $host, $port);
+        }
     } else {
         $listen_url = sprintf("http://%s:%d", $host, $port);
     }
 
     logmsg("listen on $listen_url");
-    $daemon = Mojo::Server::Daemon->new(app => app, listen => [$listen_url], inactivity_timeout => 0)->start;
+    eval {
+        $daemon = Mojo::Server::Daemon->new(app => app, listen => [$listen_url], inactivity_timeout => 0)->start;
+    };
+    if ($@) {
+        Irssi::print("Failed to initialize server, please check your /set ipw_ settings: $@");
+    }
 
     #TODO XXX FIXME we may be able to up this to 1000 or higher if abuse
     # mojo ->{handle} into the input_add system
@@ -266,16 +278,6 @@ sub sendto_client {
         $client->send({binary => $msg});
     }
 }
-
-=thisisntused
-sub sendto_all_clients {
-    my $msg = shift;
-
-    while (my ($client, $chash) = each %clients) {
-        sendto_client($chash->{'client'}, $msg);
-    }
-}
-=cut
 
 sub parse_init {
     my ($client, $id, $arguments) = @_;
