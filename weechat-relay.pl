@@ -167,6 +167,8 @@ sub mojoify {
     my $cert = Irssi::settings_get_str('ipw_cert');
     my $key  = Irssi::settings_get_str('ipw_key');
 
+    length $host or $host = "*";
+
     %settings = (host => $host, port => $port, cert => $cert, key => $key, ssl => Irssi::settings_get_bool('ipw_ssl'), docroot => Irssi::settings_get_str('ipw_docroot'));
 
     if(Irssi::settings_get_bool('ipw_ssl')) {
