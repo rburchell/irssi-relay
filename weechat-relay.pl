@@ -284,7 +284,8 @@ sub sendto_client {
 }
 
 # Supported password_hash_algo values, in preference order.
-my @supported_algos = ['plain'];
+# There must exist a sub password_<X> for every such item listed. We check this in a BEGIN {} block below for sanity purposes.
+my @supported_algos = ('plain');
 
 sub make_nonce;
 
@@ -310,7 +311,7 @@ BEGIN {
 
 sub parse_handshake {
 	my ($client, $id, $arguments) = @_;
-	my @kvparis = split(',', $arguments);
+	my @kvpairs = split(',', $arguments);
 	my $chash = $clients{$client};
 	my @client_algos = ('plain');
 	my @client_zip = ();
@@ -361,6 +362,56 @@ sub parse_handshake {
 		$m->add_string($result{$k});
 	}
 	sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
+	$client->{handshaked} = 1;
+}
+
+# Password implemntations should go here, as password_<algo>
+# If you have any funny symbols that aren't normal in perl, replace them with _. EG pbdkdf2_sha256
+#
+# Input is the client-supplied password (or password hash). Return true if okay or false otherwise. Feel free to log whatever you want.
+
+sub password_plain {
+	my $pass = shift;
+	return $pass eq Irssi::settings_get_str('ipw_password');
+}
+
+sub password_sha256;
+sub password_sha512;
+BEGIN {
+	if ( eval{require Digest::SHA; 1;} ) {
+		my sub password_sha {
+			my $param = shift;
+			my $chash = shift;
+			my $proc = shift;
+			my $nonce = $chash->{nonce};
+			my ($salt, $hash) = split(':', $param);
+			# De-hex these
+			$salt = pack "H*", $salt;
+			$hash = pack "H*", $hash;
+			# The salt must begin with the server nonce
+			if (substr($salt, 0, length $nonce) ne $nonce) {
+				return "";
+			}
+			my $tp = Irssi::settings_get_str('ipw_password');
+			my $tphash = $proc->($salt . $tp);
+			return $hash eq $tphash;
+		}
+		*password_sha256 = sub {
+			return password_sha(@_, \&Digest::SHA::sha256);
+		}
+		*password_sha512 = sub {
+			return password_sha(@_, \&Digest::SHA::sha512);
+		}
+	}
+}
+
+# Checks that @supported_algos is okay
+BEGIN {
+	for my $algo (@supported_algos) {
+		no strict 'refs';
+		my $check = s/\W/_/rg;
+		defined __PACKAGE__->can("password_$check") or die "Missing password implementation for $algo";
+	}
 }
 
 sub parse_init {
@@ -373,12 +424,23 @@ sub parse_init {
         if ($key eq 'compression') {
 	    $chash->{compression} = $value;
         } elsif ($key eq 'password') {
-            # TODO
-	    my $tpass = Irssi::settings_get_str('ipw_password');
-            if ($value eq $tpass) {
+            if (password_plain $value, $chash) {
 	            $chash->{'authenticated'} = 1;
 	            logmsg("Client has successfully authenticated");
             }
+	} elsif ($key eq 'password_hash') {
+		my ($algo, $param) = split /:/, $value;
+		if (grep /\Q$algo\E/, @supported_algos) {
+			$algo =~ s/\W/_/g;
+			my $proc = __PACKAGE__->can("password_$algo");
+			if ($proc->($param, $chash)) {
+				$chash->{authenticated} = 1;
+				logmsg("Client has successfully authenticated");
+			}
+		}
+		else {
+			logmsg("Client attempted unknown algorithm $algo");
+		}
         } else {
             logmsg("Client sent unknown init key: $key = $value")
         }
@@ -796,7 +858,7 @@ my %hdata_classes = (
 			my ($wi) = $w->{active};
 			if(defined($wi)) {
 				my $s = $wi->{server};
-				$m->add_string('irc.' . $s->{address} . "." . $wi->{name});
+				$m->add_string('irc.' . $s->{address}//"none" . "." . $wi->{name});
 			}
 			elsif ($w->{name}//"" ne '') {
 				$m->add_string('irc.' . $w->{name});
