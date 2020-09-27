@@ -285,7 +285,9 @@ sub sendto_client {
 
 # Supported password_hash_algo values, in preference order.
 # There must exist a sub password_<X> for every such item listed. We check this in a BEGIN {} block below for sanity purposes.
-my @supported_algos = ('plain');
+my @supported_algos = ('sha512', 'sha256', 'plain');
+
+use constant PBKDF2_ITER => 100_000;
 
 sub make_nonce;
 
@@ -333,7 +335,7 @@ sub parse_handshake {
 	my $nonce = make_nonce;
 	$chash->{nonce} = $nonce;
 	my %result = (
-		password_hash_iterations => 10_000,
+		password_hash_iterations => PBKDF2_ITER,
 		totp => 'off',
 		nonce => uc unpack("H*", $nonce),
 		compression => should_compress($client) ? "zlib" : "off"
@@ -375,33 +377,98 @@ sub password_plain {
 	return $pass eq Irssi::settings_get_str('ipw_password');
 }
 
-sub password_sha256;
-sub password_sha512;
+use Digest::SHA ();
+sub password_sha {
+	my $param = shift;
+	my $chash = shift;
+	my $proc = shift;
+	my $nonce = $chash->{nonce};
+	my ($salt, $hash) = split(':', $param);
+	# De-hex these
+	$salt = pack "H*", $salt;
+	$hash = pack "H*", $hash;
+	# The salt must begin with the server nonce
+	if (substr($salt, 0, length $nonce) ne $nonce) {
+		return "";
+	}
+	my $tp = Irssi::settings_get_str('ipw_password');
+	my $tphash = $proc->($salt . $tp);
+	return $hash eq $tphash;
+}
+sub password_sha256 {
+	return password_sha(@_, \&Digest::SHA::sha256);
+}
+sub password_sha512 {
+	return password_sha(@_, \&Digest::SHA::sha512);
+}
+sub password_pbkdf2_sha256;
+sub password_pbdkf2_sha512;
 BEGIN {
-	if ( eval{require Digest::SHA; 1;} ) {
-		my sub password_sha {
+	if (eval { require PBKDF2::Tiny; 1; }) {
+		my sub password_pbkdf2 {
 			my $param = shift;
 			my $chash = shift;
-			my $proc = shift;
-			my $nonce = $chash->{nonce};
-			my ($salt, $hash) = split(':', $param);
+			my $algo = shift;
+			my $nonce= $chash->{nonce};
+			my ($salt, $iter, $hash) = split(':', $param);
 			# De-hex these
 			$salt = pack "H*", $salt;
 			$hash = pack "H*", $hash;
+			eval { use warnings FATAL => ; $iter += 0; } or do {
+				logmsg("Invalid iteration count received: $iter");
+				return "";
+			};
 			# The salt must begin with the server nonce
 			if (substr($salt, 0, length $nonce) ne $nonce) {
 				return "";
 			}
-			my $tp = Irssi::settings_get_str('ipw_password');
-			my $tphash = $proc->($salt . $tp);
-			return $hash eq $tphash;
+			return PBKDF2::Tiny::verify($hash, $algo, Irssi::settings_get_str('ipw_password'), $salt, $iter);
 		}
-		*password_sha256 = sub {
-			return password_sha(@_, \&Digest::SHA::sha256);
+		*password_pbkdf2_sha256 = sub {
+			return password_pbkdf2(@_, "SHA-256");
+		};
+		*password_pbkdf2_sha512 = sub{
+			return password_pbkdf2(@_, "SHA-512");
+		};
+		unshift @supported_algos, 'pbkdf2+sha512', 'pbkdf2+sha256';
+	}
+	elsif (eval { require Crypt::PBKDF2; 1; }) {
+		my sub password_pbkdf2 {
+			my $param = shift;
+			my $chash = shift;
+			my $algo = shift;
+			my $nonce= $chash->{nonce};
+			my ($salt, $iter, $hash) = split(':', $param);
+			# De-hex these
+			$salt = pack "H*", $salt;
+			$hash = pack "H*", $hash;
+			eval { use warnings FATAL => ; $iter += 0; } or do {
+				logmsg("Invalid iteration count received: $iter");
+				return "";
+			};
+			# The salt must begin with the server nonce
+			if (substr($salt, 0, length $nonce) ne $nonce) {
+				return "";
+			}
+			$algo = $algo->clone(iterations => $iter);
+			my $enc = $algo->encode_string($salt, $hash);
+			return $algo->validate($enc, Irssi::settings_get_str('ipw_password'));
 		}
-		*password_sha512 = sub {
-			return password_sha(@_, \&Digest::SHA::sha512);
-		}
+		*password_pbkdf2_sha256 = sub {
+			state $algo = Crypt::PBKDF2->new(
+				hash_class => 'HMACSHA2',
+				hash_args => { sha_size => 256 },
+			);
+			return password_pbkdf2(@_, $algo);
+		};
+		*password_pbkdf2_sha512 = sub {
+			state $algo = Crypt::PBKDF2->new(
+				hash_class => 'HMACSHA2',
+				hash_args => { sha_size => 512 },
+			);
+			return password_pbkdf2(@_, $algo);
+		};
+		unshift @supported_algos, 'pbkdf2+sha512', 'pbkdf2+sha256';
 	}
 }
 
@@ -409,7 +476,7 @@ BEGIN {
 BEGIN {
 	for my $algo (@supported_algos) {
 		no strict 'refs';
-		my $check = s/\W/_/rg;
+		my $check = $algo =~ s/\W/_/rg;
 		defined __PACKAGE__->can("password_$check") or die "Missing password implementation for $algo";
 	}
 }
@@ -426,7 +493,7 @@ sub parse_init {
         } elsif ($key eq 'password') {
             if (password_plain $value, $chash) {
 	            $chash->{'authenticated'} = 1;
-	            logmsg("Client has successfully authenticated");
+	            logmsg("Client has successfully authenticated using plain authentication");
             }
 	} elsif ($key eq 'password_hash') {
 		my ($algo, $param) = split /:/, $value;
@@ -435,7 +502,7 @@ sub parse_init {
 			my $proc = __PACKAGE__->can("password_$algo");
 			if ($proc->($param, $chash)) {
 				$chash->{authenticated} = 1;
-				logmsg("Client has successfully authenticated");
+				logmsg("Client has successfully authenticated using algorithm $algo");
 			}
 		}
 		else {
@@ -856,7 +923,7 @@ my %hdata_classes = (
 		key_full_name => sub {
 			my ($w, $m) = @_;
 			my ($wi) = $w->{active};
-			if(defined($wi)) {
+			if(defined($wi) && defined($wi->{server}) && defined($wi->{server}->{address}) && defined($wi->{name})) {
 				my $s = $wi->{server};
 				$m->add_string('irc.' . $s->{address}//"none" . "." . $wi->{name});
 			}
