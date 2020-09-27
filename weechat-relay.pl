@@ -256,7 +256,9 @@ websocket '/weechat' => sub {
         client => $client,
         color => 0,
         authenticated => 0,
+	handshaked => 0,
 	compression => 'off',
+	nonce => '',
     };
     $client->on(message => \&process_message);
     $client->on(finish => sub {
@@ -279,6 +281,86 @@ sub sendto_client {
     if($clients{$client}->{'authenticated'}) {
         $client->send({binary => $msg});
     }
+}
+
+# Supported password_hash_algo values, in preference order.
+my @supported_algos = ['plain'];
+
+sub make_nonce;
+
+# We can use any of these CPAN modules to make a nonce. If none of them are available, we'll try /dev/urandom on a *nix system. Otherwise, we fall back to ugly rand().
+BEGIN {
+	my sub make_nonce_fallback {
+		return map { chr(int(rand(256))) } 1..16;
+	}
+
+	if (-r "/dev/urandom") {
+		*make_nonce = sub {
+			my $buf = " " x 16;
+			open my $fd, "<", "/dev/urandom" or goto &make_nonce_fallback;
+			read $fd, $buf, 16;
+			close $fd;
+			return $buf;
+		}
+	}
+	else {
+		*make_nonce = \&make_nonce_fallback;
+	}
+}
+
+sub parse_handshake {
+	my ($client, $id, $arguments) = @_;
+	my @kvparis = split(',', $arguments);
+	my $chash = $clients{$client};
+	my @client_algos = ('plain');
+	my @client_zip = ();
+	foreach my $kvpair (@kvpairs)
+	{
+		my ($key, $value) = split('=', $kvpair);
+		for ($key)
+		{
+			/password_hash_algo/ and do {
+				@client_algos = split(':', $value);
+			},next;
+			/compression/ and do {
+				$chash->{compression} = $value;
+			},next;
+			logmsg("Client sent unknown handshake key: $key = $value");
+		}
+	}
+	# Determine if we can accept this connection.
+	my $nonce = make_nonce;
+	$chash->{nonce} = $nonce;
+	my %result = (
+		password_hash_iterations => 10_000,
+		totp => 'off',
+		nonce => uc unpack("H*", $nonce),
+		compression => should_compress($client) ? "zlib" : "off"
+	);
+	for my $algo (@supported_algos) {
+		if (grep /\Q$algo\E/, @client_algos) {
+			$result{password_hash_algo} = $algo;
+		}
+		else {
+			# No compatible algorithm. Immediately terminate the connection.
+			# Should we still send the handshake reply?
+			logmsg("Terminating client connection due to no compatible password algorithm");
+			$client->finish();
+			return;
+		}
+	}
+	# Unlike init we actually reply with a hashtable...
+	my $m = WeechatMessage->new;
+	$m->add_string($id);
+	$m->add_type("htb");
+	$m->add_type('str');
+	$m->add_type('str');
+	$m->add_int(scalar keys %result);
+	for my $k (keys %result) {
+		$m->add_string($k);
+		$m->add_string($result{$k});
+	}
+	sendto_client($client, (should_compress($client) ? $m->get_zipped_buffer() : $m->get_buffer()));
 }
 
 sub parse_init {
@@ -1782,8 +1864,16 @@ sub process_message {
     }
 =cut
 
-		if ($command eq 'init') {
+		if ($command eq 'handshake' && !$client->{handshaked}) {
+			parse_handshake($client, $id, $arguments);
+			return;
+		}
+		elsif ($command eq 'init') {
 			parse_init($client, $id, $arguments);
+			# Drop if bad INIT password
+			if (!$clients{$client}->{authenticated}) {
+				$client->finish();
+			}
 			return;
 		}
 
