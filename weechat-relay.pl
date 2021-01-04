@@ -73,6 +73,7 @@ if ($have_compression) {
 	Irssi::settings_add_bool('irssi_proxy_websocket', 'ipw_compress', 0);
 	Irssi::settings_add_int('irssi_proxy_websocket', 'ipw_ziplevel', Compress::Zlib::Z_DEFAULT_COMPRESSION);
 }
+Irssi::settings_add_str('irssi_proxy_websocket', 'totp_secret', "");
 
 my $tsfmt = Irssi::settings_get_str("timestamp_format");
 my $tsrxval;
@@ -291,7 +292,7 @@ use constant PBKDF2_ITER => 100_000;
 
 sub make_nonce;
 
-# We can use any of these CPAN modules to make a nonce. If none of them are available, we'll try /dev/urandom on a *nix system. Otherwise, we fall back to ugly rand().
+# We'll try /dev/urandom on a *nix system. Otherwise, we fall back to ugly rand().
 BEGIN {
 	my sub make_nonce_fallback {
 		return map { chr(int(rand(256))) } 1..16;
@@ -336,10 +337,10 @@ sub parse_handshake {
 	$chash->{nonce} = $nonce;
 	my %result = (
 		password_hash_iterations => PBKDF2_ITER,
-		totp => 'off',
 		nonce => uc unpack("H*", $nonce),
 		compression => should_compress($client) ? "zlib" : "off"
 	);
+	$result = defined(current_otp) ? "on" : "off";
 	for my $algo (@supported_algos) {
 		if (grep /\Q$algo\E/, @client_algos) {
 			$result{password_hash_algo} = $algo;
@@ -481,18 +482,106 @@ BEGIN {
 	}
 }
 
+sub decode_alpha { return sprintf "%05b", ord(lc $_) - ord('a'); }
+sub decode_digit { return sprintf "%05b", 26 + ord($_) - ord('2'); }
+
+# TOTP implementation
+sub decode_base32 {
+	my $base32 = shift;
+	my $value;
+	$base32 =~ /^[A-Za-z2-7]+$/ or die "Invalid characters";
+	($value = $base32) =~ s/[a-z]/decode_alpha $&/egi;
+	$value =~ s/[2-7]/decode_digit $&/egi;
+	($value =~ s/^(?:[01]{8})*\K0{0,7}\z//) or die "Invalid padding";
+	return pack "B*" => $value;
+}
+
+use constant {
+	TOTP_INTERVAL => 30,
+	TOTP_OFFSET => 0,
+	TOTP_DIGITS => 6,
+};
+
+sub quadify;
+sub quad_str;
+sub totp_counter;
+BEGIN {
+	if (eval { pack Q => 1 }) {
+		*quadify = sub { use integer; return 0+($_[0]); }
+		*quad_str = sub { return pack "Q>" => $_[0]; }
+		*totp_counter = sub { use integer; my $t = shift//time; $t -= TOTP_OFFSET; return $t / TOTP_INTERVAL; }
+	}
+	else {
+		require Math::BigInt;
+		*quadify = sub { return Math::BigInt->new($_[0]); }
+		*quad_str = sub {
+			my $inst = shift;
+			$inst->isa("Math::BigInt") or die;
+			my $str = $inst->to_bytes();
+			$str = (chr(0) x (8 - length($str))) . $str;
+			return $str;
+		}
+		*totp_counter = sub { my $i = Math::BigInt->new(shift//time); return $i->bsub(TOTP_OFFSET)->bdiv(TOTP_INTERVAL); }
+	}
+}
+
+sub htop {
+	my ($key, $counter) = @_;
+	my $cstr = quad_str $counter;
+
+	my $hmac = Digest::SHA::hmac_sha1($cstr, $key);
+
+	my $off = ord(substr($hmac, -1, 1)) & 0x0F;
+	my $dt = unpack N => substr($hmac, $off, 4);
+	$dt &= 0x7FFFFFFF;
+	return sprintf "%0*d", TOTP_DIGITS, ($dt % (10 ** TOTP_DIGITS));
+}
+
+sub totp {
+	my $key = shift;
+	return htop $key => totp_counter;
+
+sub current_otp {
+	my $secret = (Irssi::settings_get_str("totp_secret")||return ""); # False if the TOTP secret is not yet set.
+
+	my $key = decode_base32 $secret // return undef;
+
+	return totp $key;
+}
+
+sub check_otp {
+	my $otp = shift;
+
+	my $current = current_otp // return "";
+
+	return $otp eq $current;
+}
+
 sub parse_init {
     my ($client, $id, $arguments) = @_;
     my @kvpairs = split(',', $arguments);
     my $chash = $clients{$client};
+    my $passok = "";
+    my $curotp = current_otp;
+    my $otpok = !defined $curotp;
     foreach my $kvpair (@kvpairs) {
         my ($key, $value) = split('=', $kvpair);
 
         if ($key eq 'compression') {
 	    $chash->{compression} = $value;
+        } elsif ($key eq 'totp') {
+	    if (defined $curotp) {
+	        if ($value eq $curotp) {
+		    logmsg("Client has correct TOTP");
+		    $otpok = 1;
+		}
+V		else {
+		    logmsg("Client has incorrect TOTP");
+	        }
+	    }
         } elsif ($key eq 'password') {
             if (password_plain $value, $chash) {
-	            $chash->{'authenticated'} = 1;
+		    $passok = 1;
 	            logmsg("Client has successfully authenticated using plain authentication");
             }
 	} elsif ($key eq 'password_hash') {
@@ -501,7 +590,7 @@ sub parse_init {
 			$algo =~ s/\W/_/g;
 			my $proc = __PACKAGE__->can("password_$algo");
 			if ($proc->($param, $chash)) {
-				$chash->{authenticated} = 1;
+				$passok = 1;
 				logmsg("Client has successfully authenticated using algorithm $algo");
 			}
 		}
@@ -512,6 +601,7 @@ sub parse_init {
             logmsg("Client sent unknown init key: $key = $value")
         }
     }
+    $chash->{'authenticated'} = 1 if ($passok && $otpok);
 }
 
 sub should_compress {
