@@ -7,10 +7,6 @@ protocol](https://www.weechat.org/files/doc/devel/weechat_relay_protocol.en.html
 simply put, it allows you to use the same irc connection you know and love from
 other user interfaces, like [glowing-bear](https://github.com/glowing-bear/glowing-bear).
 
-# contact
-
-get in touch with us, on irc of course. ;) we hang out on ##irssi-relay on freenode.
-
 # patches
 
 got an itch to scratch? that's great. feel free to submit a pull request! :)
