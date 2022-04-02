@@ -312,6 +312,8 @@ BEGIN {
 	}
 }
 
+sub current_otp;
+
 sub parse_handshake {
 	my ($client, $id, $arguments) = @_;
 	my @kvpairs = split(',', $arguments);
@@ -507,21 +509,21 @@ sub quad_str;
 sub totp_counter;
 BEGIN {
 	if (eval { pack Q => 1 }) {
-		*quadify = sub { use integer; return 0+($_[0]); }
-		*quad_str = sub { return pack "Q>" => $_[0]; }
-		*totp_counter = sub { use integer; my $t = shift//time; $t -= TOTP_OFFSET; return $t / TOTP_INTERVAL; }
+		*quadify = sub { use integer; return 0+($_[0]); };
+		*quad_str = sub { return pack "Q>" => $_[0]; };
+		*totp_counter = sub { use integer; my $t = shift//time; $t -= TOTP_OFFSET; return $t / TOTP_INTERVAL; };
 	}
 	else {
 		require Math::BigInt;
-		*quadify = sub { return Math::BigInt->new($_[0]); }
+		*quadify = sub { return Math::BigInt->new($_[0]); };
 		*quad_str = sub {
 			my $inst = shift;
 			$inst->isa("Math::BigInt") or die;
 			my $str = $inst->to_bytes();
 			$str = (chr(0) x (8 - length($str))) . $str;
 			return $str;
-		}
-		*totp_counter = sub { my $i = Math::BigInt->new(shift//time); return $i->bsub(TOTP_OFFSET)->bdiv(TOTP_INTERVAL); }
+		};
+		*totp_counter = sub { my $i = Math::BigInt->new(shift//time); return $i->bsub(TOTP_OFFSET)->bdiv(TOTP_INTERVAL); };
 	}
 }
 
@@ -540,6 +542,7 @@ sub htop {
 sub totp {
 	my $key = shift;
 	return htop $key => totp_counter;
+}
 
 sub current_otp {
 	my $secret = (Irssi::settings_get_str("totp_secret")||return ""); # False if the TOTP secret is not yet set.
@@ -552,7 +555,7 @@ sub current_otp {
 sub check_otp {
 	my $otp = shift;
 
-	my $current = current_otp // return "";
+	my $current = current_otp() // return "";
 
 	return $otp eq $current;
 }
@@ -575,7 +578,7 @@ sub parse_init {
 		    logmsg("Client has correct TOTP");
 		    $otpok = 1;
 		}
-V		else {
+		else {
 		    logmsg("Client has incorrect TOTP");
 	        }
 	    }
