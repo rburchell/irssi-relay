@@ -340,7 +340,7 @@ sub parse_handshake {
 		nonce => uc unpack("H*", $nonce),
 		compression => should_compress($client) ? "zlib" : "off"
 	);
-	$result = defined(current_otp) ? "on" : "off";
+	$result{totp} = defined(current_otp) ? "on" : "off";
 	for my $algo (@supported_algos) {
 		if (grep /\Q$algo\E/, @client_algos) {
 			$result{password_hash_algo} = $algo;
